@@ -1,8 +1,12 @@
 // lib/screens/tournament_details_screen.dart
 // ─────────────────────────────────────────────
-// TOURNAMENT DETAILS SCREEN
-// Shows full tournament info with room system,
-// join logic, and real-time Firestore updates.
+// TOURNAMENT DETAILS SCREEN  (v2)
+// New additions:
+//   • _buildRewardExplanationSection — auto-generated reward breakdown
+//     + admin-authored rewardDescription field
+//   • _EsportsFallbackBanner — rich esports-themed default banner
+//     (shown when bannerUrl is empty; replaces simple dot-pattern)
+// All existing features preserved.
 // ─────────────────────────────────────────────
 
 import 'package:flutter/material.dart';
@@ -13,7 +17,7 @@ import '../models/tournament_model.dart';
 import '../services/tournament_service.dart';
 
 // ─────────────────────────────────────────────
-// DESIGN TOKENS (same as HomeScreen)
+// DESIGN TOKENS
 // ─────────────────────────────────────────────
 class _C {
   static const background      = Color(0xFF06040E);
@@ -24,7 +28,6 @@ class _C {
   static const purple          = Color(0xFF9D55FF);
   static const purpleLight     = Color(0xFFB07EF8);
   static const purpleDim       = Color(0xFF7B3FE4);
-  // static const purpleDark      = Color(0xFF3C2570);
   static const purpleGlow      = Color(0x559D55FF);
   static const purpleGlowFaint = Color(0x229D55FF);
 
@@ -34,9 +37,7 @@ class _C {
 
   static const gold            = Color(0xFFFFCC44);
   static const live            = Color(0xFFFF4466);
-  // static const liveGlow        = Color(0x55FF4466);
   static const success         = Color(0xFF44FF99);
-  // static const successGlow     = Color(0x3344FF99);
 
   static const border          = Color(0x337B3FE4);
   static const borderBright    = Color(0x667B3FE4);
@@ -46,11 +47,7 @@ class _C {
 // TOURNAMENT DETAILS SCREEN
 // ─────────────────────────────────────────────
 class TournamentDetailsScreen extends StatefulWidget {
-  /// Pass the tournament from the card tap.
-  /// The screen also subscribes to real-time updates
-  /// so joinedPlayers count stays fresh.
   final TournamentModel tournament;
-
   const TournamentDetailsScreen({super.key, required this.tournament});
 
   @override
@@ -60,9 +57,9 @@ class TournamentDetailsScreen extends StatefulWidget {
 
 class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     with TickerProviderStateMixin {
-  // ── State ─────────────────────────────────
-  bool _isJoined    = false;
-  bool _isJoining   = false;
+
+  bool _isJoined     = false;
+  bool _isJoining    = false;
   bool _checkingJoin = true;
 
   late AnimationController _fadeCtrl;
@@ -70,12 +67,12 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
   late Animation<double>   _fadeIn;
   late Animation<double>   _pulse;
 
-  final TournamentService  _service = TournamentService.instance;
-  final FirebaseFirestore  _db      = FirebaseFirestore.instance;
-  final FirebaseAuth       _auth    = FirebaseAuth.instance;
+  final TournamentService _service = TournamentService.instance;
+  final FirebaseFirestore _db      = FirebaseFirestore.instance;
+  final FirebaseAuth      _auth    = FirebaseAuth.instance;
 
-  User?   get _user        => _auth.currentUser;
-  String? get _userId      => _user?.uid;
+  User?   get _user         => _auth.currentUser;
+  String? get _userId       => _user?.uid;
   String  get _tournamentId => widget.tournament.id;
 
   @override
@@ -100,7 +97,7 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     super.dispose();
   }
 
-  // ── Check if current user has already joined ─
+  // ── Check join status ────────────────────────
   Future<void> _checkIfJoined() async {
     if (_userId == null) {
       setState(() => _checkingJoin = false);
@@ -124,7 +121,7 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     }
   }
 
-  // ── Join Tournament ──────────────────────────
+  // ── Join tournament ──────────────────────────
   Future<void> _joinTournament(TournamentModel t) async {
     if (_userId == null) {
       _showSnack('Please log in to join tournaments.');
@@ -138,7 +135,6 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     setState(() => _isJoining = true);
 
     try {
-      // 1. Write participant document
       await _db
           .collection('tournaments')
           .doc(_tournamentId)
@@ -149,20 +145,18 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
         'userName':  _user?.displayName ?? 'Unknown',
         'userEmail': _user?.email ?? '',
         'joinedAt':  FieldValue.serverTimestamp(),
-        'status':    'registered', // future: 'playing', 'eliminated', 'winner'
+        'status':    'registered',
       });
 
-      // 2. Increment joinedPlayers atomically
       await _service.joinTournament(_tournamentId);
 
       if (mounted) {
-        setState(() {
-          _isJoined  = true;
-          _isJoining = false;
-        });
-        _showSuccessSnack('You\'re in! Good luck, ${_user?.displayName?.split(' ').first ?? 'Striker'}!');
+        setState(() { _isJoined = true; _isJoining = false; });
+        _showSuccessSnack(
+          'You\'re in! Good luck, ${_user?.displayName?.split(' ').first ?? 'Striker'}!',
+        );
       }
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
         setState(() => _isJoining = false);
         _showSnack('Failed to join. Please try again.');
@@ -171,40 +165,33 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
   }
 
   void _showSnack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg, style: const TextStyle(color: _C.textPrimary)),
-        backgroundColor: _C.surfaceElevated,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-          side: const BorderSide(color: _C.border),
-        ),
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg, style: const TextStyle(color: _C.textPrimary)),
+      backgroundColor: _C.surfaceElevated,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: const BorderSide(color: _C.border),
       ),
-    );
+    ));
   }
 
   void _showSuccessSnack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.check_circle_rounded, color: _C.success, size: 18),
-            const SizedBox(width: 8),
-            Expanded(child: Text(msg, style: const TextStyle(color: _C.textPrimary))),
-          ],
-        ),
-        backgroundColor: _C.surfaceElevated,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-          side: BorderSide(color: _C.success.withValues(alpha: 0.4)),
-        ),
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Row(children: [
+        const Icon(Icons.check_circle_rounded, color: _C.success, size: 18),
+        const SizedBox(width: 8),
+        Expanded(child: Text(msg, style: const TextStyle(color: _C.textPrimary))),
+      ]),
+      backgroundColor: _C.surfaceElevated,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(color: _C.success.withValues(alpha: 0.4)),
       ),
-    );
+    ));
   }
 
-  // ── Copy to clipboard helper ─────────────────
   void _copyToClipboard(String text, String label) {
     Clipboard.setData(ClipboardData(text: text));
     _showSuccessSnack('$label copied!');
@@ -220,60 +207,49 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
       body: StreamBuilder<TournamentModel?>(
         stream: _service.tournamentByIdStream(_tournamentId),
         builder: (context, snap) {
-          // Use latest data from stream, fall back to passed-in model
           final t = snap.data ?? widget.tournament;
-
           return FadeTransition(
             opacity: _fadeIn,
             child: CustomScrollView(
               physics: const BouncingScrollPhysics(),
               slivers: [
-                // ── Collapsible Banner App Bar ──────
                 _buildSliverAppBar(t),
-
-                // ── Body Content ────────────────────
-                SliverToBoxAdapter(
-                  child: Column(
-                    children: [
-                      const SizedBox(height: 16),
-                      _buildInfoRow(t),
-                      const SizedBox(height: 20),
-                      _buildPrizeSection(t),
-                      const SizedBox(height: 16),
-                      _buildMatchInfo(t),
-                      const SizedBox(height: 16),
-                      _buildSlotProgress(t),
-                      const SizedBox(height: 16),
-                      _buildRoomSection(t),
-                      const SizedBox(height: 16),
-                      if (t.rules != null && t.rules!.isNotEmpty)
-                        _buildRulesSection(t),
-                      const SizedBox(height: 100),
-                    ],
-                  ),
-                ),
+                SliverToBoxAdapter(child: Column(children: [
+                  const SizedBox(height: 16),
+                  _buildInfoRow(t),
+                  const SizedBox(height: 20),
+                  _buildPrizeSection(t),
+                  const SizedBox(height: 16),
+                  // ✅ NEW: Reward explanation
+                  _buildRewardExplanationSection(t),
+                  _buildMatchInfo(t),
+                  const SizedBox(height: 16),
+                  _buildSlotProgress(t),
+                  const SizedBox(height: 16),
+                  _buildRoomSection(t),
+                  const SizedBox(height: 16),
+                  if (t.rules != null && t.rules!.isNotEmpty)
+                    _buildRulesSection(t),
+                  const SizedBox(height: 100),
+                ])),
               ],
             ),
           );
         },
       ),
-      // ── Sticky Join Button ─────────────────────
       bottomNavigationBar: StreamBuilder<TournamentModel?>(
         stream: _service.tournamentByIdStream(_tournamentId),
-        builder: (context, snap) {
-          final t = snap.data ?? widget.tournament;
-          return _buildJoinBar(t);
-        },
+        builder: (_, snap) => _buildJoinBar(snap.data ?? widget.tournament),
       ),
     );
   }
 
   // ─────────────────────────────────────────────
-  // SLIVER APP BAR (Banner)
+  // SLIVER APP BAR
   // ─────────────────────────────────────────────
   Widget _buildSliverAppBar(TournamentModel t) {
     return SliverAppBar(
-      expandedHeight: 260,
+      expandedHeight: 280,
       pinned: true,
       backgroundColor: _C.background,
       leading: GestureDetector(
@@ -297,36 +273,18 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
   }
 
   // ─────────────────────────────────────────────
-  // INFO ROW (quick stats)
+  // INFO ROW
   // ─────────────────────────────────────────────
   Widget _buildInfoRow(TournamentModel t) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        children: [
-          _QuickStat(
-            icon: Icons.map_rounded,
-            label: 'MAP',
-            value: t.map,
-            color: _C.purpleLight,
-          ),
-          const SizedBox(width: 10),
-          _QuickStat(
-            icon: Icons.people_rounded,
-            label: 'MODE',
-            value: t.mode,
-            color: _C.purple,
-          ),
-          const SizedBox(width: 10),
-          _QuickStat(
-            icon: Icons.access_time_rounded,
-            label: 'STARTS',
-            value: t.startTimeDisplay,
-            color: _C.gold,
-            flex: 2,
-          ),
-        ],
-      ),
+      child: Row(children: [
+        _QuickStat(icon: Icons.map_rounded,          label: 'MAP',    value: t.map,              color: _C.purpleLight),
+        const SizedBox(width: 10),
+        _QuickStat(icon: Icons.people_rounded,       label: 'MODE',   value: t.mode,             color: _C.purple),
+        const SizedBox(width: 10),
+        _QuickStat(icon: Icons.access_time_rounded,  label: 'STARTS', value: t.startTimeDisplay, color: _C.gold, flex: 2),
+      ]),
     );
   }
 
@@ -338,65 +296,182 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
       title: 'PRIZE BREAKDOWN',
       icon: Icons.emoji_events_rounded,
       iconColor: _C.gold,
-      child: Column(
-        children: [
-          // Total prize pool highlight
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  _C.gold.withValues(alpha: 0.12),
-                  _C.gold.withValues(alpha: 0.04),
-                ],
+      child: Column(children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(colors: [
+              _C.gold.withValues(alpha: 0.12),
+              _C.gold.withValues(alpha: 0.04),
+            ]),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _C.gold.withValues(alpha: 0.25)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.workspace_premium_rounded, color: _C.gold, size: 20),
+            const SizedBox(width: 10),
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('TOTAL PRIZE POOL', style: TextStyle(
+                color: _C.gold.withValues(alpha: 0.7),
+                fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1,
+              )),
+              Text(t.prizePoolDisplay, style: const TextStyle(
+                color: _C.gold, fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: 0.5,
+              )),
+            ]),
+          ]),
+        ),
+        const SizedBox(height: 14),
+        if (t.positions.isNotEmpty) ...[
+          ...t.positions.map((p) => _PositionRewardRow(reward: p)),
+          const SizedBox(height: 10),
+        ],
+        if (t.killReward > 0 || t.survivalReward > 0)
+          _RewardTypeRow(tournament: t),
+      ]),
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // ✅ NEW: REWARD EXPLANATION SECTION
+  // Shows auto-generated breakdown + admin description
+  // ─────────────────────────────────────────────
+  Widget _buildRewardExplanationSection(TournamentModel t) {
+    final hasDescription = t.rewardDescription != null &&
+        t.rewardDescription!.trim().isNotEmpty;
+    final hasAutoContent  = t.killReward > 0 ||
+        t.survivalReward > 0 ||
+        t.positions.isNotEmpty;
+
+    if (!hasDescription && !hasAutoContent) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: _SectionCard(
+        title: 'HOW REWARDS WORK',
+        icon: Icons.info_rounded,
+        iconColor: _C.purpleLight,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Auto-generated reward summary ──
+            if (hasAutoContent) ...[
+              _RewardExplainBubble(
+                icon: Icons.emoji_events_rounded,
+                color: _C.gold,
+                title: 'Placement Rewards',
+                description: t.positions.isNotEmpty
+                    ? 'Top ${t.positions.length} players earn cash prizes '
+                      'based on their final placement at match end.'
+                    : 'Position-based rewards are distributed at match end.',
               ),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _C.gold.withValues(alpha: 0.25)),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.workspace_premium_rounded,
-                    color: _C.gold, size: 20),
-                const SizedBox(width: 10),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('TOTAL PRIZE POOL',
-                        style: TextStyle(
-                          color: _C.gold.withValues(alpha: 0.7),
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1,
-                        )),
-                    Text(
-                      t.prizePoolDisplay,
-                      style: const TextStyle(
-                        color: _C.gold,
-                        fontSize: 24,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ],
+              if (t.killReward > 0) ...[
+                const SizedBox(height: 10),
+                _RewardExplainBubble(
+                  icon: Icons.sports_kabaddi_rounded,
+                  color: _C.live,
+                  title: 'Kill Reward — ₹${t.killReward.toInt()} per kill',
+                  description: 'Earn ₹${t.killReward.toInt()} for every '
+                      'elimination you get during the match. '
+                      'Rewards accumulate and are paid out after the match.',
                 ),
               ],
-            ),
-          ),
-          const SizedBox(height: 14),
+              if (t.survivalReward > 0) ...[
+                const SizedBox(height: 10),
+                _RewardExplainBubble(
+                  icon: Icons.shield_rounded,
+                  color: _C.purpleLight,
+                  title: 'Survival Reward — ₹${t.survivalReward.toInt()}',
+                  description: 'A flat bonus of ₹${t.survivalReward.toInt()} '
+                      'is awarded for surviving until the final circle.',
+                ),
+              ],
+              // Reward type note
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: _C.surfaceElevated,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _C.border),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.lightbulb_rounded, color: _C.gold, size: 14),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(
+                    _rewardTypeExplanation(t.rewardType),
+                    style: const TextStyle(
+                      color: _C.textSecondary,
+                      fontSize: 11,
+                      height: 1.5,
+                    ),
+                  )),
+                ]),
+              ),
+            ],
 
-          // Position rewards
-          if (t.positions.isNotEmpty) ...[
-            ...t.positions.map((p) => _PositionRewardRow(reward: p)),
-            const SizedBox(height: 10),
+            // ── Admin-authored description ──
+            if (hasDescription) ...[
+              if (hasAutoContent) ...[
+                const SizedBox(height: 16),
+                Container(height: 1, color: _C.border),
+                const SizedBox(height: 14),
+                const Row(children: [
+                  Icon(Icons.campaign_rounded, color: _C.purple, size: 13),
+                  SizedBox(width: 6),
+                  Text('FROM THE ORGANISER', style: TextStyle(
+                    color: _C.textMuted, fontSize: 9,
+                    fontWeight: FontWeight.w800, letterSpacing: 1,
+                  )),
+                ]),
+                const SizedBox(height: 10),
+              ],
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: _C.purpleGlowFaint,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _C.border),
+                ),
+                child: Text(
+                  t.rewardDescription!,
+                  style: const TextStyle(
+                    color: _C.textSecondary,
+                    fontSize: 13,
+                    height: 1.65,
+                  ),
+                ),
+              ),
+            ],
           ],
-
-          // Kill / Survival rewards
-          if (t.killReward > 0 || t.survivalReward > 0)
-            _RewardTypeRow(tournament: t),
-        ],
+        ),
       ),
     );
+  }
+
+  String _rewardTypeExplanation(String type) {
+    switch (type) {
+      case 'kill':
+        return 'This is a Kill-Based tournament. '
+            'Your total reward depends entirely on your kill count. '
+            'No placement bonus is given.';
+      case 'survival':
+        return 'This is a Survival-Based tournament. '
+            'Stay alive as long as possible to earn survival bonuses. '
+            'Kill count does not affect rewards.';
+      case 'position':
+        return 'This is a Placement-Based tournament. '
+            'Only your final position determines your prize. '
+            'Top placements win the biggest rewards.';
+      case 'mixed':
+        return 'This is a Mixed Reward tournament. '
+            'Your total payout = Placement Prize + (Kills × Kill Reward). '
+            'Both placement and eliminations are rewarded.';
+      default:
+        return 'Rewards are distributed based on match performance.';
+    }
   }
 
   // ─────────────────────────────────────────────
@@ -407,15 +482,13 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
       title: 'MATCH INFO',
       icon: Icons.sports_esports_rounded,
       iconColor: _C.purple,
-      child: Column(
-        children: [
-          _InfoTile(label: 'Tournament Type', value: t.modeDisplay),
-          _InfoTile(label: 'Map', value: t.map),
-          _InfoTile(label: 'Entry Fee', value: t.entryFeeDisplay,
-              valueColor: t.entryFee > 0 ? _C.textPrimary : _C.success),
-          _InfoTile(label: 'Reward Type', value: _rewardTypeLabel(t.rewardType)),
-        ],
-      ),
+      child: Column(children: [
+        _InfoTile(label: 'Tournament Type',  value: t.modeDisplay),
+        _InfoTile(label: 'Map',              value: t.map),
+        _InfoTile(label: 'Entry Fee',        value: t.entryFeeDisplay,
+            valueColor: t.entryFee > 0 ? _C.textPrimary : _C.success),
+        _InfoTile(label: 'Reward Type',      value: _rewardTypeLabel(t.rewardType)),
+      ]),
     );
   }
 
@@ -438,84 +511,57 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
       title: 'SLOTS',
       icon: Icons.grid_view_rounded,
       iconColor: _C.purpleLight,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              RichText(
-                text: TextSpan(
-                  children: [
-                    TextSpan(
-                      text: '${t.joinedPlayers}',
-                      style: const TextStyle(
-                        color: _C.textPrimary,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    TextSpan(
-                      text: ' / ${t.maxPlayers}',
-                      style: const TextStyle(
-                        color: _C.textSecondary,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            RichText(text: TextSpan(children: [
+              TextSpan(text: '${t.joinedPlayers}', style: const TextStyle(
+                color: _C.textPrimary, fontSize: 22, fontWeight: FontWeight.w900,
+              )),
+              TextSpan(text: ' / ${t.maxPlayers}', style: const TextStyle(
+                color: _C.textSecondary, fontSize: 14, fontWeight: FontWeight.w500,
+              )),
+            ])),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: t.isAlmostFull
+                    ? _C.live.withValues(alpha: 0.15)
+                    : _C.purpleGlowFaint,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: t.isAlmostFull
+                    ? _C.live.withValues(alpha: 0.4)
+                    : _C.border),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: t.isAlmostFull
-                      ? _C.live.withValues(alpha: 0.15)
-                      : _C.purpleGlowFaint,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: t.isAlmostFull
-                        ? _C.live.withValues(alpha: 0.4)
-                        : _C.border,
-                  ),
+              child: Text(
+                t.isAlmostFull ? '🔥 Almost Full' : '${t.slotsLeft} slots left',
+                style: TextStyle(
+                  color: t.isAlmostFull ? _C.live : _C.purpleLight,
+                  fontSize: 11, fontWeight: FontWeight.w700,
                 ),
-                child: Text(
-                  t.isAlmostFull ? '🔥 Almost Full' : '${t.slotsLeft} slots left',
-                  style: TextStyle(
-                    color: t.isAlmostFull ? _C.live : _C.purpleLight,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: LinearProgressIndicator(
-              value: pct,
-              minHeight: 6,
-              backgroundColor: _C.surfaceElevated,
-              valueColor: AlwaysStoppedAnimation(
-                t.isAlmostFull ? _C.live : _C.purple,
               ),
             ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: pct, minHeight: 6,
+            backgroundColor: _C.surfaceElevated,
+            valueColor: AlwaysStoppedAnimation(t.isAlmostFull ? _C.live : _C.purple),
           ),
-          const SizedBox(height: 6),
-          Text(
-            '${(pct * 100).toStringAsFixed(0)}% filled',
-            style: const TextStyle(
-              color: _C.textMuted, fontSize: 11, fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 6),
+        Text('${(pct * 100).toStringAsFixed(0)}% filled',
+          style: const TextStyle(color: _C.textMuted, fontSize: 11, fontWeight: FontWeight.w500)),
+      ]),
     );
   }
 
   // ─────────────────────────────────────────────
-  // ROOM SECTION (visibility gated)
+  // ROOM SECTION
   // ─────────────────────────────────────────────
   Widget _buildRoomSection(TournamentModel t) {
     return _SectionCard(
@@ -538,14 +584,8 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
       title: 'RULES',
       icon: Icons.gavel_rounded,
       iconColor: _C.purpleLight,
-      child: Text(
-        t.rules ?? '',
-        style: const TextStyle(
-          color: _C.textSecondary,
-          fontSize: 13,
-          height: 1.6,
-        ),
-      ),
+      child: Text(t.rules ?? '',
+        style: const TextStyle(color: _C.textSecondary, fontSize: 13, height: 1.6)),
     );
   }
 
@@ -553,8 +593,8 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
   // JOIN BAR (sticky bottom)
   // ─────────────────────────────────────────────
   Widget _buildJoinBar(TournamentModel t) {
-    final isFull   = t.slotsLeft <= 0;
-    final isLive   = t.status == TournamentStatus.live;
+    final isFull      = t.slotsLeft <= 0;
+    final isLive      = t.status == TournamentStatus.live;
     final isCompleted = t.status == TournamentStatus.completed;
 
     return Container(
@@ -565,45 +605,36 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
-          child: Row(
-            children: [
-              // Entry fee info
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('ENTRY FEE',
-                    style: TextStyle(
-                      color: _C.textMuted, fontSize: 10,
-                      fontWeight: FontWeight.w700, letterSpacing: 1,
-                    )),
-                  Text(
-                    t.entryFeeDisplay,
-                    style: const TextStyle(
-                      color: _C.textPrimary,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: _isJoined
-                    ? _JoinedBadge()
-                    : isCompleted
-                        ? _DisabledButton(label: 'TOURNAMENT ENDED')
-                        : isFull
-                            ? _DisabledButton(label: 'TOURNAMENT FULL')
-                            : isLive
-                                ? _DisabledButton(label: 'ALREADY STARTED')
-                                : _JoinButton(
-                                    isLoading: _isJoining,
-                                    onTap: () => _joinTournament(t),
-                                  ),
-              ),
-            ],
-          ),
+          child: Row(children: [
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('ENTRY FEE', style: TextStyle(
+                  color: _C.textMuted, fontSize: 10,
+                  fontWeight: FontWeight.w700, letterSpacing: 1,
+                )),
+                Text(t.entryFeeDisplay, style: const TextStyle(
+                  color: _C.textPrimary, fontSize: 18, fontWeight: FontWeight.w900,
+                )),
+              ],
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: _isJoined
+                  ? _JoinedBadge()
+                  : isCompleted
+                      ? _DisabledButton(label: 'TOURNAMENT ENDED')
+                      : isFull
+                          ? _DisabledButton(label: 'TOURNAMENT FULL')
+                          : isLive
+                              ? _DisabledButton(label: 'ALREADY STARTED')
+                              : _JoinButton(
+                                  isLoading: _isJoining,
+                                  onTap: () => _joinTournament(t),
+                                ),
+            ),
+          ]),
         ),
       ),
     );
@@ -611,7 +642,7 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
 }
 
 // ─────────────────────────────────────────────
-// BANNER HEADER WIDGET
+// BANNER HEADER  (with improved fallback banner)
 // ─────────────────────────────────────────────
 class _BannerHeader extends StatelessWidget {
   final TournamentModel   tournament;
@@ -621,28 +652,29 @@ class _BannerHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = tournament;
+    final hasBanner = t.bannerUrl != null && t.bannerUrl!.isNotEmpty;
+
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Background: banner image or geometric pattern
-        if (t.bannerUrl != null && t.bannerUrl!.isNotEmpty)
-          Image.network(
-            t.bannerUrl!,
-            fit: BoxFit.cover,
-            errorBuilder: (_, _, _) => _FallbackBanner(),
-          )
+        // Background
+        if (hasBanner)
+          Image.network(t.bannerUrl!, fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => _EsportsFallbackBanner(
+                tournamentType: t.tournamentType,
+              ))
         else
-          _FallbackBanner(),
+          _EsportsFallbackBanner(tournamentType: t.tournamentType),
 
-        // Dark gradient overlay
+        // Gradient overlay
         DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                Colors.black.withValues(alpha: 0.2),
-                _C.background.withValues(alpha: 0.95),
+                Colors.black.withValues(alpha: 0.15),
+                _C.background.withValues(alpha: 0.97),
               ],
               stops: const [0.0, 1.0],
             ),
@@ -651,36 +683,22 @@ class _BannerHeader extends StatelessWidget {
 
         // Content
         Positioned(
-          bottom: 20,
-          left: 20,
-          right: 20,
+          bottom: 20, left: 20, right: 20,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Status badge
               _StatusBadge(status: t.status, pulse: pulse),
               const SizedBox(height: 10),
-              // Title
-              Text(
-                t.title,
-                style: const TextStyle(
-                  color: _C.textPrimary,
-                  fontSize: 26,
-                  fontWeight: FontWeight.w900,
-                  height: 1.1,
-                  shadows: [Shadow(color: _C.purpleGlow, blurRadius: 16)],
-                ),
-              ),
+              Text(t.title, style: const TextStyle(
+                color: _C.textPrimary,
+                fontSize: 26, fontWeight: FontWeight.w900, height: 1.1,
+                shadows: [Shadow(color: _C.purpleGlow, blurRadius: 16)],
+              )),
               const SizedBox(height: 4),
-              Text(
-                t.subtitle,
-                style: const TextStyle(
-                  color: _C.textSecondary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
+              Text(t.subtitle, style: const TextStyle(
+                color: _C.textSecondary, fontSize: 13, fontWeight: FontWeight.w400,
+              )),
             ],
           ),
         ),
@@ -689,42 +707,217 @@ class _BannerHeader extends StatelessWidget {
   }
 }
 
-class _FallbackBanner extends StatelessWidget {
+// ─────────────────────────────────────────────
+// ✅ NEW: ESPORTS FALLBACK BANNER
+// Rich default banner shown when bannerUrl is empty.
+// Each tournament type gets a distinct color accent.
+// ─────────────────────────────────────────────
+class _EsportsFallbackBanner extends StatelessWidget {
+  final String tournamentType;
+  const _EsportsFallbackBanner({required this.tournamentType});
+
+  static Color _accentFor(String type) {
+    switch (type) {
+      case 'clash_squad': return const Color(0xFFFF6B35);
+      case 'lone_wolf':   return const Color(0xFF00D4FF);
+      case 'league':      return const Color(0xFFFFCC44);
+      default:            return const Color(0xFF9D55FF); // battle_royale
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final accent = _accentFor(tournamentType);
     return Container(
       color: _C.surfaceCard,
-      child: CustomPaint(painter: _BannerPatternPainter()),
+      child: CustomPaint(
+        painter: _EsportsBannerPainter(accent: accent),
+      ),
     );
   }
 }
 
-class _BannerPatternPainter extends CustomPainter {
+/// Draws a premium esports-themed banner:
+/// • Deep gradient background
+/// • Hexagonal grid nodes
+/// • Circuit-board diagonal traces
+/// • Glowing orb spotlights
+/// • Accent-colored scan ring
+class _EsportsBannerPainter extends CustomPainter {
+  final Color accent;
+  const _EsportsBannerPainter({required this.accent});
+
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = _C.purple.withValues(alpha: 0.06)
+    // ── 1. Background gradient ─────────────────
+    final bgPaint = Paint();
+    final bgRect = Rect.fromLTWH(0, 0, size.width, size.height);
+    bgPaint.shader = LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        const Color(0xFF0D0820),
+        const Color(0xFF06040E),
+        const Color(0xFF110830),
+      ],
+    ).createShader(bgRect);
+    canvas.drawRect(bgRect, bgPaint);
+
+    // ── 2. Glowing orbs ────────────────────────
+    _drawOrb(canvas, size, Offset(size.width * 0.75, size.height * 0.25),
+        accent.withValues(alpha: 0.18), 120);
+    _drawOrb(canvas, size, Offset(size.width * 0.1, size.height * 0.7),
+        accent.withValues(alpha: 0.10), 80);
+    _drawOrb(canvas, size, Offset(size.width * 0.5, size.height * 0.1),
+        const Color(0xFF9D55FF).withValues(alpha: 0.08), 60);
+
+    // ── 3. Hex-grid dots ───────────────────────
+    final dotPaint = Paint()
+      ..color = accent.withValues(alpha: 0.07)
       ..style = PaintingStyle.fill;
-    const spacing = 28.0;
-    final cols = (size.width  / spacing).ceil() + 2;
-    final rows = (size.height / spacing).ceil() + 2;
-    for (var c = 0; c < cols; c++) {
-      for (var r = 0; r < rows; r++) {
-        canvas.drawCircle(Offset(c * spacing.toDouble(), r * spacing.toDouble()), 1.2, paint);
+    const hexW = 32.0;
+    const hexH = 28.0;
+    final cols  = (size.width  / hexW).ceil() + 2;
+    final rows  = (size.height / hexH).ceil() + 2;
+    for (var r = 0; r < rows; r++) {
+      final offset = (r % 2 == 0) ? 0.0 : hexW * 0.5;
+      for (var c = 0; c < cols; c++) {
+        final cx = c * hexW + offset;
+        final cy = r * hexH;
+        canvas.drawCircle(Offset(cx, cy), 1.5, dotPaint);
       }
     }
-    final linePaint = Paint()
-      ..color = _C.purple.withValues(alpha: 0.04)
-      ..strokeWidth = 0.5;
-    for (var i = 0; i < 6; i++) {
-      final x = size.width * (0.5 + i * 0.15);
-      canvas.drawLine(Offset(x, 0), Offset(x - size.height * 0.5, size.height), linePaint);
+
+    // ── 4. Circuit-trace lines ─────────────────
+    final tracePaint = Paint()
+      ..color = accent.withValues(alpha: 0.08)
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke;
+
+    // Horizontal + diagonal traces
+    for (var i = 0; i < 5; i++) {
+      final y = size.height * (0.2 + i * 0.18);
+      final path = Path();
+      path.moveTo(0, y);
+      path.lineTo(size.width * 0.3, y);
+      path.lineTo(size.width * 0.35, y - 12);
+      path.lineTo(size.width * 0.6, y - 12);
+      path.lineTo(size.width * 0.65, y);
+      path.lineTo(size.width, y);
+      canvas.drawPath(path, tracePaint);
     }
+
+    // Corner accent lines (right side)
+    final accentLinePaint = Paint()
+      ..color = accent.withValues(alpha: 0.25)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+    for (var i = 0; i < 4; i++) {
+      final startX = size.width - 40.0 - i * 16;
+      canvas.drawLine(Offset(startX, 0), Offset(size.width, size.width - startX), accentLinePaint);
+    }
+
+    // ── 5. Scan ring (center-right) ────────────
+    final ringPaint = Paint()
+      ..color = accent.withValues(alpha: 0.15)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+    final ringCenter = Offset(size.width * 0.78, size.height * 0.35);
+    canvas.drawCircle(ringCenter, 55, ringPaint);
+    canvas.drawCircle(ringCenter, 38,
+        ringPaint..color = accent.withValues(alpha: 0.1));
+    canvas.drawCircle(ringCenter, 20,
+        ringPaint..color = accent.withValues(alpha: 0.2));
+
+    // ── 6. Corner bracket (top-right) ──────────
+    final bracketPaint = Paint()
+      ..color = accent.withValues(alpha: 0.4)
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    const bSize = 20.0;
+    const margin = 16.0;
+    // Top-right
+    canvas.drawLine(Offset(size.width - margin - bSize, margin),
+        Offset(size.width - margin, margin), bracketPaint);
+    canvas.drawLine(Offset(size.width - margin, margin),
+        Offset(size.width - margin, margin + bSize), bracketPaint);
+    // Bottom-left
+    canvas.drawLine(Offset(margin, size.height - margin - bSize),
+        Offset(margin, size.height - margin), bracketPaint);
+    canvas.drawLine(Offset(margin, size.height - margin),
+        Offset(margin + bSize, size.height - margin), bracketPaint);
   }
+
+  void _drawOrb(Canvas canvas, Size size, Offset center, Color color, double radius) {
+    final paint = Paint()
+      ..shader = RadialGradient(
+        colors: [color, color.withValues(alpha: 0)],
+      ).createShader(Rect.fromCircle(center: center, radius: radius));
+    canvas.drawCircle(center, radius, paint);
+  }
+
   @override
-  bool shouldRepaint(covariant CustomPainter _) => false;
+  bool shouldRepaint(_EsportsBannerPainter old) => old.accent != accent;
 }
 
+// ─────────────────────────────────────────────
+// ✅ NEW: REWARD EXPLAIN BUBBLE
+// ─────────────────────────────────────────────
+class _RewardExplainBubble extends StatelessWidget {
+  final IconData icon;
+  final Color    color;
+  final String   title;
+  final String   description;
+  const _RewardExplainBubble({
+    required this.icon, required this.color,
+    required this.title, required this.description,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.15),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: color, size: 14),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: TextStyle(
+                  color: color, fontSize: 12, fontWeight: FontWeight.w800,
+                )),
+                const SizedBox(height: 3),
+                Text(description, style: const TextStyle(
+                  color: _C.textSecondary, fontSize: 11, height: 1.5,
+                )),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// STATUS BADGE  (unchanged)
+// ─────────────────────────────────────────────
 class _StatusBadge extends StatelessWidget {
   final TournamentStatus  status;
   final Animation<double> pulse;
@@ -749,159 +942,113 @@ class _StatusBadge extends StatelessWidget {
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.18),
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(
-            color: color.withValues(alpha: 0.5 + 0.3 * pulse.value),
-          ),
+          border: Border.all(color: color.withValues(alpha: 0.5 + 0.3 * pulse.value)),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (status == TournamentStatus.live) ...[
-              Container(
-                width: 6, height: 6,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: color.withValues(alpha: 0.5 + 0.5 * pulse.value),
-                  boxShadow: [BoxShadow(color: color.withValues(alpha: 0.6), blurRadius: 6)],
-                ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (status == TournamentStatus.live) ...[
+            Container(
+              width: 6, height: 6,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: color.withValues(alpha: 0.5 + 0.5 * pulse.value),
+                boxShadow: [BoxShadow(color: color.withValues(alpha: 0.6), blurRadius: 6)],
               ),
-              const SizedBox(width: 6),
-            ],
-            Text(label, style: TextStyle(
-              color: color, fontSize: 10,
-              fontWeight: FontWeight.w800, letterSpacing: 1.2,
-            )),
+            ),
+            const SizedBox(width: 6),
           ],
-        ),
+          Text(label, style: TextStyle(
+            color: color, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.2,
+          )),
+        ]),
       ),
     );
   }
 }
 
 // ─────────────────────────────────────────────
-// ROOM WIDGETS
+// ROOM WIDGETS  (unchanged)
 // ─────────────────────────────────────────────
-
 class _RoomLoading extends StatelessWidget {
   const _RoomLoading();
-
   @override
   Widget build(BuildContext context) {
     return const Padding(
       padding: EdgeInsets.symmetric(vertical: 10),
-      child: Center(
-        child: CircularProgressIndicator(
-          color: _C.purple, strokeWidth: 2,
-        ),
-      ),
+      child: Center(child: CircularProgressIndicator(color: _C.purple, strokeWidth: 2)),
     );
   }
 }
 
 class _RoomLocked extends StatelessWidget {
   const _RoomLocked();
-
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: _C.surfaceElevated,
-        borderRadius: BorderRadius.circular(12),
+        color: _C.surfaceElevated, borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _C.border),
       ),
-      child: Column(
-        children: [
-          Container(
-            width: 52, height: 52,
-            decoration: BoxDecoration(
-              color: _C.purpleGlowFaint,
-              shape: BoxShape.circle,
-              border: Border.all(color: _C.border),
-            ),
-            child: const Icon(Icons.lock_rounded, color: _C.purple, size: 24),
+      child: Column(children: [
+        Container(
+          width: 52, height: 52,
+          decoration: BoxDecoration(
+            color: _C.purpleGlowFaint, shape: BoxShape.circle,
+            border: Border.all(color: _C.border),
           ),
-          const SizedBox(height: 12),
-          const Text(
-            'Room Details Locked',
-            style: TextStyle(
-              color: _C.textPrimary,
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Join the tournament to unlock\nRoom ID and Password',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: _C.textSecondary,
-              fontSize: 12,
-              height: 1.5,
-            ),
-          ),
-        ],
-      ),
+          child: const Icon(Icons.lock_rounded, color: _C.purple, size: 24),
+        ),
+        const SizedBox(height: 12),
+        const Text('Room Details Locked', style: TextStyle(
+          color: _C.textPrimary, fontSize: 15, fontWeight: FontWeight.w700,
+        )),
+        const SizedBox(height: 6),
+        const Text('Join the tournament to unlock\nRoom ID and Password',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: _C.textSecondary, fontSize: 12, height: 1.5)),
+      ]),
     );
   }
 }
 
 class _RoomRevealed extends StatelessWidget {
-  final TournamentModel             tournament;
+  final TournamentModel              tournament;
   final void Function(String, String) onCopy;
   const _RoomRevealed({required this.tournament, required this.onCopy});
 
   @override
   Widget build(BuildContext context) {
-    final t         = tournament;
+    final t        = tournament;
     final hasRoomId = t.roomId != null && t.roomId!.isNotEmpty;
     final hasPw     = t.roomPassword != null && t.roomPassword!.isNotEmpty;
 
-    if (!hasRoomId && !hasPw) {
-      return _RoomPending();
-    }
+    if (!hasRoomId && !hasPw) return _RoomPending();
 
-    return Column(
-      children: [
-        // Joined badge
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(
-            color: _C.success.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: _C.success.withValues(alpha: 0.3)),
-          ),
-          child: const Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.check_circle_rounded, color: _C.success, size: 15),
-              SizedBox(width: 6),
-              Text('You\'re registered for this tournament',
-                style: TextStyle(
-                  color: _C.success, fontSize: 12, fontWeight: FontWeight.w600,
-                )),
-            ],
-          ),
+    return Column(children: [
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: _C.success.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _C.success.withValues(alpha: 0.3)),
         ),
-        const SizedBox(height: 14),
-        if (hasRoomId)
-          _RoomField(
-            label: 'ROOM ID',
-            value: t.roomId!,
-            icon: Icons.meeting_room_rounded,
-            onCopy: () => onCopy(t.roomId!, 'Room ID'),
-          ),
-        if (hasRoomId && hasPw) const SizedBox(height: 10),
-        if (hasPw)
-          _RoomField(
-            label: 'PASSWORD',
-            value: t.roomPassword!,
-            icon: Icons.vpn_key_rounded,
-            onCopy: () => onCopy(t.roomPassword!, 'Password'),
-          ),
-      ],
-    );
+        child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(Icons.check_circle_rounded, color: _C.success, size: 15),
+          SizedBox(width: 6),
+          Text('You\'re registered for this tournament',
+            style: TextStyle(color: _C.success, fontSize: 12, fontWeight: FontWeight.w600)),
+        ]),
+      ),
+      const SizedBox(height: 14),
+      if (hasRoomId)
+        _RoomField(label: 'ROOM ID',   value: t.roomId!,
+            icon: Icons.meeting_room_rounded, onCopy: () => onCopy(t.roomId!, 'Room ID')),
+      if (hasRoomId && hasPw) const SizedBox(height: 10),
+      if (hasPw)
+        _RoomField(label: 'PASSWORD', value: t.roomPassword!,
+            icon: Icons.vpn_key_rounded, onCopy: () => onCopy(t.roomPassword!, 'Password')),
+    ]);
   }
 }
 
@@ -915,91 +1062,68 @@ class _RoomPending extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _C.gold.withValues(alpha: 0.25)),
       ),
-      child: Row(
-        children: [
-          const Icon(Icons.schedule_rounded, color: _C.gold, size: 20),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Room details coming soon',
-                  style: TextStyle(
-                    color: _C.gold, fontSize: 13, fontWeight: FontWeight.w700,
-                  )),
-                const SizedBox(height: 2),
-                const Text(
-                  'Room ID & Password will be revealed 30 min before the match.',
-                  style: TextStyle(color: _C.textSecondary, fontSize: 11, height: 1.4),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+      child: Row(children: [
+        const Icon(Icons.schedule_rounded, color: _C.gold, size: 20),
+        const SizedBox(width: 12),
+        const Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Room details coming soon',
+              style: TextStyle(color: _C.gold, fontSize: 13, fontWeight: FontWeight.w700)),
+            SizedBox(height: 2),
+            Text('Room ID & Password will be revealed 30 min before the match.',
+              style: TextStyle(color: _C.textSecondary, fontSize: 11, height: 1.4)),
+          ],
+        )),
+      ]),
     );
   }
 }
 
 class _RoomField extends StatelessWidget {
-  final String   label;
-  final String   value;
+  final String label, value;
   final IconData icon;
   final VoidCallback onCopy;
-  const _RoomField({
-    required this.label, required this.value,
-    required this.icon,  required this.onCopy,
-  });
+  const _RoomField({required this.label, required this.value, required this.icon, required this.onCopy});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: _C.surfaceElevated,
-        borderRadius: BorderRadius.circular(12),
+        color: _C.surfaceElevated, borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _C.borderBright),
       ),
-      child: Row(
-        children: [
-          Icon(icon, color: _C.purple, size: 16),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, style: const TextStyle(
-                  color: _C.textMuted, fontSize: 9,
-                  fontWeight: FontWeight.w700, letterSpacing: 1,
-                )),
-                const SizedBox(height: 2),
-                Text(value, style: const TextStyle(
-                  color: _C.textPrimary, fontSize: 16,
-                  fontWeight: FontWeight.w800, letterSpacing: 1.5,
-                )),
-              ],
+      child: Row(children: [
+        Icon(icon, color: _C.purple, size: 16),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: const TextStyle(
+            color: _C.textMuted, fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1,
+          )),
+          const SizedBox(height: 2),
+          Text(value, style: const TextStyle(
+            color: _C.textPrimary, fontSize: 16, fontWeight: FontWeight.w800, letterSpacing: 1.5,
+          )),
+        ])),
+        GestureDetector(
+          onTap: onCopy,
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: _C.purpleGlowFaint, borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: _C.border),
             ),
+            child: const Icon(Icons.copy_rounded, color: _C.purple, size: 14),
           ),
-          GestureDetector(
-            onTap: onCopy,
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: _C.purpleGlowFaint,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: _C.border),
-              ),
-              child: const Icon(Icons.copy_rounded, color: _C.purple, size: 14),
-            ),
-          ),
-        ],
-      ),
+        ),
+      ]),
     );
   }
 }
 
 // ─────────────────────────────────────────────
-// PRIZE BREAKDOWN ROWS
+// PRIZE BREAKDOWN  (unchanged)
 // ─────────────────────────────────────────────
 class _PositionRewardRow extends StatelessWidget {
   final PositionReward reward;
@@ -1016,27 +1140,17 @@ class _PositionRewardRow extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 36,
-            child: Text(emoji, style: const TextStyle(fontSize: 18)),
-          ),
-          Text(
-            r <= 3 ? ['1st Place', '2nd Place', '3rd Place'][r - 1] : 'Rank $r',
-            style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w600),
-          ),
-          const Spacer(),
-          Text(
-            '₹${_fmt(reward.amount)}',
-            style: TextStyle(
-              color: color,
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
-      ),
+      child: Row(children: [
+        SizedBox(width: 36, child: Text(emoji, style: const TextStyle(fontSize: 18))),
+        Text(
+          r <= 3 ? ['1st Place', '2nd Place', '3rd Place'][r - 1] : 'Rank $r',
+          style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w600),
+        ),
+        const Spacer(),
+        Text('₹${_fmt(reward.amount)}', style: TextStyle(
+          color: color, fontSize: 15, fontWeight: FontWeight.w800,
+        )),
+      ]),
     );
   }
 
@@ -1046,12 +1160,12 @@ class _PositionRewardRow extends StatelessWidget {
       final t = ((a % 100000) ~/ 1000);
       final r = (a % 1000).toInt();
       if (r == 0 && t == 0) return '$l,00,000';
-      if (r == 0) return '$l,${t.toString().padLeft(2,'0')},000';
-      return '$l,${t.toString().padLeft(2,'0')},${r.toString().padLeft(3,'0')}';
+      if (r == 0) return '$l,${t.toString().padLeft(2, '0')},000';
+      return '$l,${t.toString().padLeft(2, '0')},${r.toString().padLeft(3, '0')}';
     } else if (a >= 1000) {
       final t = a ~/ 1000;
       final r = (a % 1000).toInt();
-      return r == 0 ? '$t,000' : '$t,${r.toString().padLeft(3,'0')}';
+      return r == 0 ? '$t,000' : '$t,${r.toString().padLeft(3, '0')}';
     }
     return a.toInt().toString();
   }
@@ -1067,49 +1181,38 @@ class _RewardTypeRow extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: _C.surfaceElevated,
-        borderRadius: BorderRadius.circular(10),
+        color: _C.surfaceElevated, borderRadius: BorderRadius.circular(10),
         border: Border.all(color: _C.border),
       ),
-      child: Row(
-        children: [
-          if (t.killReward > 0) ...[
-            const Icon(Icons.sports_kabaddi_rounded, color: _C.live, size: 16),
-            const SizedBox(width: 6),
-            Expanded(child: Text('₹${t.killReward.toInt()} per kill',
-              style: const TextStyle(
-                color: _C.textSecondary, fontSize: 12, fontWeight: FontWeight.w600,
-              ))),
-          ],
-          if (t.killReward > 0 && t.survivalReward > 0)
-            Container(width: 1, height: 20, color: _C.border,
-              margin: const EdgeInsets.symmetric(horizontal: 12)),
-          if (t.survivalReward > 0) ...[
-            const Icon(Icons.shield_rounded, color: _C.purpleLight, size: 16),
-            const SizedBox(width: 6),
-            Expanded(child: Text('₹${t.survivalReward.toInt()} survival',
-              style: const TextStyle(
-                color: _C.textSecondary, fontSize: 12, fontWeight: FontWeight.w600,
-              ))),
-          ],
+      child: Row(children: [
+        if (t.killReward > 0) ...[
+          const Icon(Icons.sports_kabaddi_rounded, color: _C.live, size: 16),
+          const SizedBox(width: 6),
+          Expanded(child: Text('₹${t.killReward.toInt()} per kill',
+            style: const TextStyle(color: _C.textSecondary, fontSize: 12, fontWeight: FontWeight.w600))),
         ],
-      ),
+        if (t.killReward > 0 && t.survivalReward > 0)
+          Container(width: 1, height: 20, color: _C.border, margin: const EdgeInsets.symmetric(horizontal: 12)),
+        if (t.survivalReward > 0) ...[
+          const Icon(Icons.shield_rounded, color: _C.purpleLight, size: 16),
+          const SizedBox(width: 6),
+          Expanded(child: Text('₹${t.survivalReward.toInt()} survival',
+            style: const TextStyle(color: _C.textSecondary, fontSize: 12, fontWeight: FontWeight.w600))),
+        ],
+      ]),
     );
   }
 }
 
 // ─────────────────────────────────────────────
-// REUSABLE SECTION WIDGETS
+// SECTION CARD + INFO TILE  (unchanged)
 // ─────────────────────────────────────────────
 class _SectionCard extends StatelessWidget {
-  final String    title;
-  final IconData  icon;
-  final Color     iconColor;
-  final Widget    child;
-  const _SectionCard({
-    required this.title, required this.icon,
-    required this.iconColor, required this.child,
-  });
+  final String title;
+  final IconData icon;
+  final Color iconColor;
+  final Widget child;
+  const _SectionCard({required this.title, required this.icon, required this.iconColor, required this.child});
 
   @override
   Widget build(BuildContext context) {
@@ -1118,80 +1221,55 @@ class _SectionCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: _C.surfaceCard,
-          borderRadius: BorderRadius.circular(16),
+          color: _C.surfaceCard, borderRadius: BorderRadius.circular(16),
           border: Border.all(color: _C.border),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, color: iconColor, size: 16),
-                const SizedBox(width: 7),
-                Text(title, style: const TextStyle(
-                  color: _C.textSecondary,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.2,
-                )),
-              ],
-            ),
-            const SizedBox(height: 14),
-            child,
-          ],
-        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(icon, color: iconColor, size: 16),
+            const SizedBox(width: 7),
+            Text(title, style: const TextStyle(
+              color: _C.textSecondary, fontSize: 11,
+              fontWeight: FontWeight.w700, letterSpacing: 1.2,
+            )),
+          ]),
+          const SizedBox(height: 14),
+          child,
+        ]),
       ),
     );
   }
 }
 
 class _InfoTile extends StatelessWidget {
-  final String  label;
-  final String  value;
-  final Color?  valueColor;
+  final String label, value;
+  final Color? valueColor;
   const _InfoTile({required this.label, required this.value, this.valueColor});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 2,
-            child: Text(label, style: const TextStyle(
-              color: _C.textMuted, fontSize: 12,
-            )),
-          ),
-          Expanded(
-            flex: 3,
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                color: valueColor ?? _C.textPrimary,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
+      child: Row(children: [
+        Expanded(flex: 2, child: Text(label,
+          style: const TextStyle(color: _C.textMuted, fontSize: 12))),
+        Expanded(flex: 3, child: Text(value,
+          textAlign: TextAlign.right,
+          style: TextStyle(
+            color: valueColor ?? _C.textPrimary,
+            fontSize: 13, fontWeight: FontWeight.w600,
+          ))),
+      ]),
     );
   }
 }
 
 class _QuickStat extends StatelessWidget {
   final IconData icon;
-  final String   label;
-  final String   value;
-  final Color    color;
-  final int      flex;
-  const _QuickStat({
-    required this.icon, required this.label,
-    required this.value, required this.color, this.flex = 1,
-  });
+  final String label, value;
+  final Color color;
+  final int flex;
+  const _QuickStat({required this.icon, required this.label, required this.value, required this.color, this.flex = 1});
 
   @override
   Widget build(BuildContext context) {
@@ -1200,44 +1278,31 @@ class _QuickStat extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         decoration: BoxDecoration(
-          color: _C.surfaceCard,
-          borderRadius: BorderRadius.circular(12),
+          color: _C.surfaceCard, borderRadius: BorderRadius.circular(12),
           border: Border.all(color: _C.border),
         ),
-        child: Row(
-          children: [
-            Icon(icon, color: color, size: 14),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(label, style: const TextStyle(
-                    color: _C.textMuted, fontSize: 9,
-                    fontWeight: FontWeight.w700, letterSpacing: 0.8,
-                  )),
-                  const SizedBox(height: 1),
-                  Text(value,
-                    style: TextStyle(
-                      color: color, fontSize: 11, fontWeight: FontWeight.w700,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+        child: Row(children: [
+          Icon(icon, color: color, size: 14),
+          const SizedBox(width: 6),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label, style: const TextStyle(
+              color: _C.textMuted, fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.8,
+            )),
+            const SizedBox(height: 1),
+            Text(value, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700),
+              overflow: TextOverflow.ellipsis),
+          ])),
+        ]),
       ),
     );
   }
 }
 
 // ─────────────────────────────────────────────
-// JOIN BAR WIDGETS
+// JOIN BAR WIDGETS  (unchanged)
 // ─────────────────────────────────────────────
 class _JoinButton extends StatefulWidget {
-  final bool       isLoading;
+  final bool         isLoading;
   final VoidCallback onTap;
   const _JoinButton({required this.isLoading, required this.onTap});
 
@@ -1255,8 +1320,7 @@ class _JoinButtonState extends State<_JoinButton>
     super.initState();
     _ctrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 120));
     _scale = Tween(begin: 1.0, end: 0.96).animate(
-      CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
-    );
+        CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
   }
   @override
   void dispose() { _ctrl.dispose(); super.dispose(); }
@@ -1274,32 +1338,22 @@ class _JoinButtonState extends State<_JoinButton>
           decoration: BoxDecoration(
             gradient: const LinearGradient(
               colors: [_C.purple, _C.purpleDim],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+              begin: Alignment.topLeft, end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(14),
-            boxShadow: [
-              BoxShadow(
-                color: _C.purple.withValues(alpha: 0.45),
-                blurRadius: 14, offset: const Offset(0, 4),
-              ),
-            ],
+            boxShadow: [BoxShadow(
+              color: _C.purple.withValues(alpha: 0.45),
+              blurRadius: 14, offset: const Offset(0, 4),
+            )],
           ),
           child: Center(
             child: widget.isLoading
-                ? const SizedBox(
-                    width: 20, height: 20,
-                    child: CircularProgressIndicator(
-                      color: Colors.white, strokeWidth: 2,
-                    ),
-                  )
-                : const Text('JOIN TOURNAMENT',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.5,
-                    )),
+                ? const SizedBox(width: 20, height: 20,
+                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : const Text('JOIN TOURNAMENT', style: TextStyle(
+                    color: Colors.white, fontSize: 14,
+                    fontWeight: FontWeight.w800, letterSpacing: 1.5,
+                  )),
           ),
         ),
       ),
@@ -1317,20 +1371,14 @@ class _JoinedBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: _C.success.withValues(alpha: 0.4)),
       ),
-      child: const Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.check_circle_rounded, color: _C.success, size: 18),
-          SizedBox(width: 8),
-          Text('REGISTERED',
-            style: TextStyle(
-              color: _C.success,
-              fontSize: 14,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.5,
-            )),
-        ],
-      ),
+      child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Icon(Icons.check_circle_rounded, color: _C.success, size: 18),
+        SizedBox(width: 8),
+        Text('REGISTERED', style: TextStyle(
+          color: _C.success, fontSize: 14,
+          fontWeight: FontWeight.w800, letterSpacing: 1.5,
+        )),
+      ]),
     );
   }
 }
@@ -1344,18 +1392,13 @@ class _DisabledButton extends StatelessWidget {
     return Container(
       height: 50,
       decoration: BoxDecoration(
-        color: _C.surfaceElevated,
-        borderRadius: BorderRadius.circular(14),
+        color: _C.surfaceElevated, borderRadius: BorderRadius.circular(14),
         border: Border.all(color: _C.border),
       ),
-      child: Center(
-        child: Text(label, style: const TextStyle(
-          color: _C.textMuted,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1,
-        )),
-      ),
+      child: Center(child: Text(label, style: const TextStyle(
+        color: _C.textMuted, fontSize: 12,
+        fontWeight: FontWeight.w700, letterSpacing: 1,
+      ))),
     );
   }
 }

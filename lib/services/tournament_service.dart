@@ -1,33 +1,30 @@
 // lib/services/tournament_service.dart
 // ─────────────────────────────────────────────
-// TOURNAMENT SERVICE
-// All Firestore queries live here.
-// UI widgets just call these methods — no
-// Firestore logic leaks into screen files.
+// TOURNAMENT SERVICE  (v2)
+// New additions:
+//   • joinedTournamentIdsStream — lightweight set of joined IDs
+//     used by HomeScreen to render joined-state badges without
+//     fetching full tournament documents
+//   • filteredTournamentsStream — used by AllTournamentsScreen
+//     to support status + type filtering in real-time
 // ─────────────────────────────────────────────
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/tournament_model.dart';
 
 class TournamentService {
-  // Singleton so we always reuse the same instance
   TournamentService._();
   static final TournamentService instance = TournamentService._();
 
-  // Firestore reference
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  // Collection name — change here if you rename it in Firestore
   static const String _collection = 'tournaments';
 
   // ────────────────────────────────────────────
-  // REAL-TIME STREAMS
-  // Use these in StreamBuilder widgets so the
-  // UI updates automatically when data changes.
+  // REAL-TIME STREAMS — HOME SCREEN
   // ────────────────────────────────────────────
 
-  /// Stream of the single featured tournament.
-  /// Returns null if no featured tournament exists.
+  /// Single featured tournament (upcoming, featured=true).
   Stream<TournamentModel?> featuredTournamentStream() {
     return _db
         .collection(_collection)
@@ -42,7 +39,7 @@ class TournamentService {
         });
   }
 
-  /// Stream of all LIVE tournaments, ordered by start time.
+  /// All LIVE tournaments ordered by start time.
   Stream<List<TournamentModel>> liveTournamentsStream() {
     return _db
         .collection(_collection)
@@ -52,9 +49,8 @@ class TournamentService {
         .map(_docsToList);
   }
 
-  /// Stream of upcoming tournaments (not featured, not live).
-  /// Pass [limit] to cap how many cards appear.
-  Stream<List<TournamentModel>> upcomingTournamentsStream({int limit = 10}) {
+  /// Upcoming tournaments (not live, not completed).
+  Stream<List<TournamentModel>> upcomingTournamentsStream({int limit = 20}) {
     return _db
         .collection(_collection)
         .where('status', isEqualTo: 'upcoming')
@@ -64,7 +60,7 @@ class TournamentService {
         .map(_docsToList);
   }
 
-  /// Stream for ALL tournaments — useful for an "Events" tab.
+  /// All tournaments — used as base for AllTournamentsScreen.
   Stream<List<TournamentModel>> allTournamentsStream() {
     return _db
         .collection(_collection)
@@ -73,8 +69,37 @@ class TournamentService {
         .map(_docsToList);
   }
 
-  /// ✅ NEW: Real-time stream for a single tournament by ID.
-  /// Used in TournamentDetailsScreen to keep joinedPlayers count fresh.
+  /// ✅ NEW: All tournaments filtered by status and/or type.
+  /// Both parameters are optional — pass null to skip that filter.
+  ///
+  /// statusFilter: 'live' | 'upcoming' | 'completed' | null
+  /// typeFilter:   'battle_royale' | 'clash_squad' | 'lone_wolf' | 'league' | null
+  ///
+  /// NOTE: Multiple inequality filters need a Firestore composite index.
+  /// Client-side filtering is used here for simplicity and index-free operation.
+  Stream<List<TournamentModel>> filteredTournamentsStream({
+    String? statusFilter,
+    String? typeFilter,
+    int limit = 50,
+  }) {
+    // Start with a broad query, then filter client-side to avoid index explosion.
+    Query<Map<String, dynamic>> query = _db.collection(_collection);
+
+    // Apply status server-side (uses the existing index)
+    if (statusFilter != null) {
+      query = query.where('status', isEqualTo: statusFilter);
+    }
+
+    query = query.orderBy('startTime').limit(limit);
+
+    return query.snapshots().map((snap) {
+      final all = _docsToList(snap);
+      if (typeFilter == null || typeFilter == 'all') return all;
+      return all.where((t) => t.tournamentType == typeFilter).toList();
+    });
+  }
+
+  /// Real-time stream for a single tournament by ID.
   Stream<TournamentModel?> tournamentByIdStream(String id) {
     return _db
         .collection(_collection)
@@ -90,7 +115,6 @@ class TournamentService {
   // ONE-TIME FETCHES
   // ────────────────────────────────────────────
 
-  /// Fetch a single tournament by ID.
   Future<TournamentModel?> getTournamentById(String id) async {
     try {
       final doc = await _db.collection(_collection).doc(id).get();
@@ -106,9 +130,8 @@ class TournamentService {
   // PLAYER ACTIONS
   // ────────────────────────────────────────────
 
-  /// Increment joinedPlayers atomically.
-  /// Call this after writing the participant document.
-  /// Returns true on success.
+  /// Atomically increment joinedPlayers counter.
+  /// Call AFTER writing the participant sub-document.
   Future<bool> joinTournament(String tournamentId) async {
     try {
       await _db.collection(_collection).doc(tournamentId).update({
@@ -123,30 +146,16 @@ class TournamentService {
 
   // ────────────────────────────────────────────
   // PARTICIPANT QUERIES
-  // Used by the Events tab to show joined tournaments
   // ────────────────────────────────────────────
 
-  /// ✅ NEW: Stream of all tournaments the user has joined.
-  /// Queries collectionGroup 'participants' filtered by userId.
-  ///
-  /// IMPORTANT: You must create a Firestore composite index for this query.
-  /// Firestore will log a direct link to create it when you first run it.
-  ///
-  /// Firestore structure:
-  ///   tournaments/{tournamentId}/participants/{userId}
-  ///     - userId: String
-  ///     - userName: String
-  ///     - userEmail: String
-  ///     - joinedAt: Timestamp
-  ///     - status: String ('registered' | 'playing' | 'eliminated' | 'winner')
+  /// Full tournament list the user has joined.
+  /// Used by the Events tab.
   Stream<List<TournamentModel>> joinedTournamentsStream(String userId) {
-    // Step 1: Listen to participant records for this user
     return _db
         .collectionGroup('participants')
         .where('userId', isEqualTo: userId)
         .snapshots()
         .asyncMap((participantSnap) async {
-          // Step 2: Extract tournament IDs from participant documents
           final tournamentIds = participantSnap.docs
               .map((doc) => doc.reference.parent.parent?.id)
               .whereType<String>()
@@ -154,13 +163,12 @@ class TournamentService {
 
           if (tournamentIds.isEmpty) return <TournamentModel>[];
 
-          // Step 3: Fetch tournament documents in a batch
-          // Firestore 'whereIn' supports up to 30 items
           final chunks = <List<String>>[];
           for (var i = 0; i < tournamentIds.length; i += 30) {
-            chunks.add(tournamentIds.sublist(
-              i, i + 30 > tournamentIds.length ? tournamentIds.length : i + 30,
-            ));
+            final end = (i + 30 > tournamentIds.length)
+                ? tournamentIds.length
+                : i + 30;
+            chunks.add(tournamentIds.sublist(i, end));
           }
 
           final tournaments = <TournamentModel>[];
@@ -172,11 +180,10 @@ class TournamentService {
                   .get();
               tournaments.addAll(_docsToList(snap));
             } catch (e) {
-              _log('joinedTournamentsStream batch fetch', e);
+              _log('joinedTournamentsStream batch', e);
             }
           }
 
-          // Sort by start time
           tournaments.sort((a, b) {
             if (a.startTime == null && b.startTime == null) return 0;
             if (a.startTime == null) return 1;
@@ -188,12 +195,28 @@ class TournamentService {
         });
   }
 
+  /// ✅ NEW: Lightweight stream — only tournament IDs the user has joined.
+  ///
+  /// Used by HomeScreen to show "JOINED" badges on cards without
+  /// fetching full tournament data. Much cheaper than
+  /// joinedTournamentsStream for a list-view use-case.
+  ///
+  /// Requires the same collectionGroup index as joinedTournamentsStream.
+  Stream<Set<String>> joinedTournamentIdsStream(String userId) {
+    return _db
+        .collectionGroup('participants')
+        .where('userId', isEqualTo: userId)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((doc) => doc.reference.parent.parent?.id)
+            .whereType<String>()
+            .toSet());
+  }
+
   // ────────────────────────────────────────────
   // PRIVATE HELPERS
   // ────────────────────────────────────────────
 
-  /// Convert a QuerySnapshot into a typed list,
-  /// skipping any documents that fail to parse.
   List<TournamentModel> _docsToList(QuerySnapshot snap) {
     final result = <TournamentModel>[];
     for (final doc in snap.docs) {
@@ -201,15 +224,13 @@ class TournamentService {
         result.add(TournamentModel.fromFirestore(doc));
       } catch (e) {
         _log('parsing doc ${doc.id}', e);
-        // Skip bad documents instead of crashing
       }
     }
     return result;
   }
 
-  void _log(String context, Object e) {
-    // Replace with your logging solution
+  void _log(String ctx, Object e) {
     // ignore: avoid_print
-    print('[TournamentService] Error in $context: $e');
+    print('[TournamentService] Error in $ctx: $e');
   }
 }

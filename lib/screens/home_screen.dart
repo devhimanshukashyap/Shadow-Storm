@@ -1,15 +1,18 @@
 // lib/screens/home_screen.dart
 // ─────────────────────────────────────────────
-// HOME SCREEN  (updated)
-// Changes from v1:
-//   • Tournament cards are now tappable →
-//     navigate to TournamentDetailsScreen
-//   • Points chip removed from stats bar
-//   • Stats bar now shows Tournaments & Wins only
+// HOME SCREEN  (v3)
+// Changes from v2:
+//   • Joined-state tracking (joinedTournamentIdsStream)
+//     → cards show "JOINED ✓" instead of "JOIN"
+//   • Category filter chips (Full Map, Clash Squad,
+//     Lone Wolf, League) for Live + Upcoming sections
+//   • "See All" buttons now navigate to AllTournamentsScreen
+//   • Fixed top spacing using MediaQuery to prevent overlap
+//   • Improved featured banner joined indicator
 // ─────────────────────────────────────────────
 
-// ignore: unused_import
-import 'dart:math' as math;
+import 'dart:async';
+// import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -17,20 +20,20 @@ import '../services/auth_service.dart';
 import '../services/tournament_service.dart';
 import '../models/tournament_model.dart';
 import 'profile_screen.dart';
-import 'tournament_details_screen.dart'; // ← NEW import
+import 'tournament_details_screen.dart';
+import 'all_tournaments_screen.dart';
+import '../screens/events_screen.dart';
 
 // ─────────────────────────────────────────────
 // ENTRY POINT
 // ─────────────────────────────────────────────
 void main() {
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: Color(0xFF06040E),
-      systemNavigationBarIconBrightness: Brightness.light,
-    ),
-  );
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+    systemNavigationBarColor: Color(0xFF06040E),
+    systemNavigationBarIconBrightness: Brightness.light,
+  ));
   runApp(const ShadowStormApp());
 }
 
@@ -58,43 +61,44 @@ class SSColors {
   static const gold            = Color(0xFFFFCC44);
   static const live            = Color(0xFFFF4466);
   static const liveGlow        = Color(0x55FF4466);
+  static const success         = Color(0xFF44FF99);
 
   static const border          = Color(0x337B3FE4);
   static const borderBright    = Color(0x667B3FE4);
 }
 
 class SSTextStyles {
-  static const _base = TextStyle(fontFamily: 'default', color: SSColors.textPrimary);
+  static const _base = TextStyle(color: SSColors.textPrimary);
 
   static final displayLarge = _base.copyWith(
     fontSize: 28, fontWeight: FontWeight.w900, letterSpacing: 0.5,
-    color: SSColors.textPrimary,
   );
-  static final titleLarge = _base.copyWith(
-    fontSize: 18, fontWeight: FontWeight.w700, letterSpacing: 0.2,
-  );
-  static final titleMedium = _base.copyWith(
-    fontSize: 15, fontWeight: FontWeight.w700, letterSpacing: 0.15,
-  );
-  static final titleSmall = _base.copyWith(
-    fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.1,
-  );
-  static final bodyMedium = _base.copyWith(
-    fontSize: 13, fontWeight: FontWeight.w400, color: SSColors.textSecondary,
-  );
-  static final labelLarge = _base.copyWith(
-    fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.5,
-    color: SSColors.textSecondary,
-  );
-  static final labelSmall = _base.copyWith(
-    fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.4,
-    color: SSColors.textMuted,
-  );
-  static final monoPrize = _base.copyWith(
-    fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: 0.5,
-    color: SSColors.gold,
-  );
+  static final titleLarge = _base.copyWith(fontSize: 18, fontWeight: FontWeight.w700, letterSpacing: 0.2);
+  static final titleMedium = _base.copyWith(fontSize: 15, fontWeight: FontWeight.w700, letterSpacing: 0.15);
+  static final titleSmall  = _base.copyWith(fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.1);
+  static final bodyMedium  = _base.copyWith(fontSize: 13, fontWeight: FontWeight.w400, color: SSColors.textSecondary);
+  static final labelLarge  = _base.copyWith(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.5, color: SSColors.textSecondary);
+  static final labelSmall  = _base.copyWith(fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.4, color: SSColors.textMuted);
+  static final monoPrize   = _base.copyWith(fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: 0.5, color: SSColors.gold);
 }
+
+// ─────────────────────────────────────────────
+// FILTER TYPES
+// ─────────────────────────────────────────────
+class _FilterOption {
+  final String value; // 'all' | 'battle_royale' | 'clash_squad' | 'lone_wolf' | 'league'
+  final String label;
+  final String emoji;
+  const _FilterOption({required this.value, required this.label, required this.emoji});
+}
+
+const _filterOptions = [
+  _FilterOption(value: 'all',           label: 'All',        emoji: '⚡'),
+  _FilterOption(value: 'battle_royale', label: 'Full Map',   emoji: '🗺️'),
+  _FilterOption(value: 'clash_squad',   label: 'Clash Squad',emoji: '⚔️'),
+  _FilterOption(value: 'lone_wolf',     label: 'Lone Wolf',  emoji: '🎯'),
+  _FilterOption(value: 'league',        label: 'League',     emoji: '🏆'),
+];
 
 // ─────────────────────────────────────────────
 // APP ROOT
@@ -115,7 +119,6 @@ class ShadowStormApp extends StatelessWidget {
           primary: SSColors.purple,
           secondary: SSColors.purpleLight,
           surface: SSColors.surface,
-          background: SSColors.background,
         ),
         splashColor: SSColors.purpleGlow,
         highlightColor: Colors.transparent,
@@ -139,11 +142,21 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   int _navIndex = 0;
 
+  // ── Services ──────────────────────────────────
   final AuthService       _authService       = AuthService();
   final TournamentService _tournamentService = TournamentService.instance;
 
   User? get _currentUser => _authService.currentUser;
+  String? get _userId    => _currentUser?.uid;
 
+  // ── Joined state ─────────────────────────────
+  Set<String> _joinedIds = {};
+  StreamSubscription<Set<String>>? _joinedSub;
+
+  // ── Filter ───────────────────────────────────
+  String _typeFilter = 'all';
+
+  // ── Animations ───────────────────────────────
   late AnimationController _fadeController;
   late AnimationController _pulseController;
   late Animation<double>   _fadeIn;
@@ -161,65 +174,90 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     _fadeIn = CurvedAnimation(parent: _fadeController, curve: Curves.easeOutCubic);
     _pulse  = CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut);
+
+    // Subscribe to joined IDs for badge rendering
+    if (_userId != null) {
+      _joinedSub = _tournamentService
+          .joinedTournamentIdsStream(_userId!)
+          .listen((ids) {
+        if (mounted) setState(() => _joinedIds = ids);
+      });
+    }
   }
 
   @override
   void dispose() {
     _fadeController.dispose();
     _pulseController.dispose();
+    _joinedSub?.cancel();
     super.dispose();
   }
 
+  // ── Navigation ────────────────────────────────
   void _openProfile() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const ProfileScreen()),
-    );
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
   }
 
-  // ── Navigate to details screen ───────────────
   void _openTournamentDetails(TournamentModel tournament) {
     Navigator.push(
       context,
       PageRouteBuilder(
-        pageBuilder: (_, animation, _) =>
-            TournamentDetailsScreen(tournament: tournament),
-        transitionsBuilder: (_, animation, _, child) {
-          return FadeTransition(
-            opacity: CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
-            child: child,
-          );
-        },
+        pageBuilder: (_, anim, _) => TournamentDetailsScreen(tournament: tournament),
+        transitionsBuilder: (_, anim, _, child) => FadeTransition(
+          opacity: CurvedAnimation(parent: anim, curve: Curves.easeOutCubic),
+          child: child,
+        ),
         transitionDuration: const Duration(milliseconds: 400),
       ),
     );
   }
 
+  void _openAllTournaments({String? statusFilter, String? typeFilter, String? title}) {
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (_, anim, _) => AllTournamentsScreen(
+          title:         title ?? 'All Tournaments',
+          initialStatus: statusFilter,
+          initialType:   typeFilter,
+        ),
+        transitionsBuilder: (_, anim, _, child) => FadeTransition(
+          opacity: CurvedAnimation(parent: anim, curve: Curves.easeOutCubic),
+          child: child,
+        ),
+        transitionDuration: const Duration(milliseconds: 350),
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // BUILD
+  // ─────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: SSColors.background,
       extendBodyBehindAppBar: true,
       appBar: _buildAppBar(),
-      body: FadeTransition(
-        opacity: _fadeIn,
-        child: _buildBody(),
-      ),
+      body: FadeTransition(opacity: _fadeIn, child: _buildBody()),
       bottomNavigationBar: _buildBottomNav(),
     );
   }
 
+  // ─────────────────────────────────────────────
+  // APP BAR
+  // ─────────────────────────────────────────────
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
       backgroundColor: Colors.transparent,
       elevation: 0,
-      toolbarHeight: 72,
+      toolbarHeight: 64,
       flexibleSpace: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Color(0xCC06040E), Colors.transparent],
+            colors: [Color(0xEE06040E), Colors.transparent],
           ),
         ),
       ),
@@ -227,179 +265,202 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       titleSpacing: 0,
       title: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Row(
-          children: [
-            _GlowContainer(
-              glowColor: SSColors.purpleGlow,
-              borderRadius: 12,
+        child: Row(children: [
+          _GlowContainer(
+            glowColor: SSColors.purpleGlow, borderRadius: 12,
+            child: Container(
+              width: 40, height: 40,
+              decoration: BoxDecoration(
+                color: SSColors.surfaceElevated,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: SSColors.border),
+              ),
+              child: const Center(child: Icon(Icons.bolt_rounded, color: SSColors.purple, size: 22)),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text('SHADOW STORM', style: SSTextStyles.titleSmall.copyWith(
+                color: SSColors.purple, letterSpacing: 1.5, fontSize: 11,
+              )),
+              Text(
+                'Welcome, ${_currentUser?.displayName?.split(' ').first ?? 'Striker'}',
+                style: SSTextStyles.bodyMedium.copyWith(fontSize: 12),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ]),
+          ),
+          _GlowContainer(
+            glowColor: SSColors.purpleGlowFaint, borderRadius: 20,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: SSColors.surfaceCard, borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: SSColors.border),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.wallet_rounded, color: SSColors.gold, size: 15),
+                const SizedBox(width: 5),
+                Text('₹2,450', style: SSTextStyles.titleSmall.copyWith(color: SSColors.gold, fontSize: 13)),
+              ]),
+            ),
+          ),
+          const SizedBox(width: 10),
+          GestureDetector(
+            onTap: _openProfile,
+            child: _GlowContainer(
+              glowColor: SSColors.purpleGlow, borderRadius: 20,
               child: Container(
-                width: 40, height: 40,
+                width: 38, height: 38,
                 decoration: BoxDecoration(
-                  color: SSColors.surfaceElevated,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: SSColors.border, width: 1),
-                ),
-                child: const Center(
-                  child: Icon(Icons.bolt_rounded, color: SSColors.purple, size: 22),
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('SHADOW STORM', style: SSTextStyles.titleSmall.copyWith(
-                    color: SSColors.purple, letterSpacing: 1.5, fontSize: 11,
-                  )),
-                  Text(
-                    'Welcome, ${_currentUser?.displayName?.split(' ').first ?? 'Striker'}',
-                    style: SSTextStyles.bodyMedium.copyWith(fontSize: 12),
-                    overflow: TextOverflow.ellipsis,
+                  shape: BoxShape.circle,
+                  gradient: const LinearGradient(
+                    colors: [SSColors.purpleDim, SSColors.purple],
+                    begin: Alignment.topLeft, end: Alignment.bottomRight,
                   ),
-                ],
-              ),
-            ),
-            _GlowContainer(
-              glowColor: SSColors.purpleGlowFaint,
-              borderRadius: 20,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                decoration: BoxDecoration(
-                  color: SSColors.surfaceCard,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: SSColors.border, width: 1),
+                  border: Border.all(color: SSColors.purpleLight, width: 1.5),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.wallet_rounded, color: SSColors.gold, size: 15),
-                    const SizedBox(width: 5),
-                    Text('₹2,450', style: SSTextStyles.titleSmall.copyWith(
-                      color: SSColors.gold, fontSize: 13,
-                    )),
-                  ],
+                child: Center(
+                  child: _currentUser?.photoURL != null
+                      ? ClipOval(child: Image.network(
+                          _currentUser!.photoURL!, width: 38, height: 38, fit: BoxFit.cover))
+                      : Text(
+                          (_currentUser?.displayName?.isNotEmpty == true)
+                              ? _currentUser!.displayName![0].toUpperCase()
+                              : 'P',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16),
+                        ),
                 ),
               ),
             ),
-            const SizedBox(width: 10),
-            GestureDetector(
-              onTap: _openProfile,
-              child: _GlowContainer(
-                glowColor: SSColors.purpleGlow,
-                borderRadius: 20,
-                child: Container(
-                  width: 38, height: 38,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const LinearGradient(
-                      colors: [SSColors.purpleDim, SSColors.purple],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    border: Border.all(color: SSColors.purpleLight, width: 1.5),
-                  ),
-                  child: Center(
-                    child: _currentUser?.photoURL != null
-                        ? ClipOval(
-                            child: Image.network(
-                              _currentUser!.photoURL!,
-                              width: 38, height: 38, fit: BoxFit.cover,
-                            ),
-                          )
-                        : Text(
-                            (_currentUser?.displayName?.isNotEmpty == true)
-                                ? _currentUser!.displayName![0].toUpperCase()
-                                : 'P',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w900,
-                              fontSize: 16,
-                            ),
-                          ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ]),
       ),
     );
   }
 
+  // ─────────────────────────────────────────────
+  // BODY
+  // ─────────────────────────────────────────────
   Widget _buildBody() {
+    if (_navIndex == 1) {
+      return const EventsScreen();
+    }
+
+      // RANKS TAB
+    if (_navIndex == 2) {
+      return const Center(
+        child: Text(
+          'Ranks Screen Coming Soon',
+          style: TextStyle(color: Colors.white),
+        ),
+      );
+    }
+
+      // WALLET TAB
+    if (_navIndex == 3) {
+      return const Center(
+        child: Text(
+          'Wallet Screen Coming Soon',
+          style: TextStyle(color: Colors.white),
+        ),
+      );
+    }
+
+    final topPad = MediaQuery.of(context).padding.top + 64 + 12;
+    
     return CustomScrollView(
       physics: const BouncingScrollPhysics(),
       slivers: [
-        const SliverToBoxAdapter(child: SizedBox(height: 88)),
+        // ── Safe area spacer ────────────────────
+        SliverToBoxAdapter(child: SizedBox(height: topPad)),
 
-        // Stats bar — ✅ points removed
+        // ── Stats bar ───────────────────────────
         const SliverToBoxAdapter(child: _StatsBar()),
+        const SliverToBoxAdapter(child: SizedBox(height: 14)),
+
+        // ── ✅ NEW: Category filter chips ────────
+        SliverToBoxAdapter(child: _FilterChipRow(
+          selected: _typeFilter,
+          onChanged: (v) => setState(() => _typeFilter = v),
+        )),
         const SliverToBoxAdapter(child: SizedBox(height: 20)),
 
-        // Featured
-        const SliverToBoxAdapter(child: _SectionHeader(
+        // ── Featured ────────────────────────────
+        SliverToBoxAdapter(child: _SectionHeader(
           title: 'FEATURED', accent: 'TOURNAMENT',
+          onSeeAll: () => _openAllTournaments(
+            statusFilter: 'upcoming', title: 'Featured Tournaments',
+          ),
         )),
         const SliverToBoxAdapter(child: SizedBox(height: 12)),
-        SliverToBoxAdapter(
-          child: _FeaturedSection(
-            stream: _tournamentService.featuredTournamentStream(),
-            pulse: _pulse,
-            onTap: _openTournamentDetails, // ← NEW
-          ),
-        ),
+        SliverToBoxAdapter(child: _FeaturedSection(
+          stream:    _tournamentService.featuredTournamentStream(),
+          pulse:     _pulse,
+          joinedIds: _joinedIds,
+          onTap:     _openTournamentDetails,
+        )),
         const SliverToBoxAdapter(child: SizedBox(height: 24)),
 
-        // Live
-        const SliverToBoxAdapter(child: _SectionHeader(
+        // ── Live ────────────────────────────────
+        SliverToBoxAdapter(child: _SectionHeader(
           title: 'LIVE', accent: 'NOW', isLive: true,
+          onSeeAll: () => _openAllTournaments(
+            statusFilter: 'live', title: 'Live Tournaments',
+          ),
         )),
         const SliverToBoxAdapter(child: SizedBox(height: 12)),
-        SliverToBoxAdapter(
-          child: _LiveSection(
-            stream: _tournamentService.liveTournamentsStream(),
-            pulse: _pulse,
-            onTap: _openTournamentDetails, // ← NEW
-          ),
-        ),
+        SliverToBoxAdapter(child: _LiveSection(
+          stream:     _tournamentService.liveTournamentsStream(),
+          pulse:      _pulse,
+          joinedIds:  _joinedIds,
+          typeFilter: _typeFilter,
+          onTap:      _openTournamentDetails,
+        )),
         const SliverToBoxAdapter(child: SizedBox(height: 24)),
 
-        // Upcoming
-        const SliverToBoxAdapter(child: _SectionHeader(
+        // ── Upcoming ────────────────────────────
+        SliverToBoxAdapter(child: _SectionHeader(
           title: 'UPCOMING', accent: 'TOURNAMENTS',
+          onSeeAll: () => _openAllTournaments(
+            statusFilter: 'upcoming',
+            typeFilter: _typeFilter == 'all' ? null : _typeFilter,
+            title: 'Upcoming Tournaments',
+          ),
         )),
         const SliverToBoxAdapter(child: SizedBox(height: 12)),
-        SliverToBoxAdapter(
-          child: _UpcomingSection(
-            stream: _tournamentService.upcomingTournamentsStream(),
-            onTap: _openTournamentDetails, // ← NEW
-          ),
-        ),
+        SliverToBoxAdapter(child: _UpcomingSection(
+          stream:     _tournamentService.upcomingTournamentsStream(),
+          joinedIds:  _joinedIds,
+          typeFilter: _typeFilter,
+          onTap:      _openTournamentDetails,
+        )),
+
         const SliverToBoxAdapter(child: SizedBox(height: 100)),
       ],
     );
   }
 
+  // ─────────────────────────────────────────────
+  // BOTTOM NAV
+  // ─────────────────────────────────────────────
   Widget _buildBottomNav() {
     final items = [
-      _NavItem(icon: Icons.home_rounded,                    label: 'Home'),
-      _NavItem(icon: Icons.emoji_events_rounded,            label: 'Events'),
-      _NavItem(icon: Icons.leaderboard_rounded,             label: 'Ranks'),
-      _NavItem(icon: Icons.account_balance_wallet_rounded,  label: 'Wallet'),
+      _NavItem(icon: Icons.home_rounded,                   label: 'Home'),
+      _NavItem(icon: Icons.emoji_events_rounded,           label: 'Events'),
+      _NavItem(icon: Icons.leaderboard_rounded,            label: 'Ranks'),
+      _NavItem(icon: Icons.account_balance_wallet_rounded, label: 'Wallet'),
     ];
 
     return Container(
       decoration: BoxDecoration(
         color: SSColors.surface,
         border: const Border(top: BorderSide(color: SSColors.border, width: 1)),
-        boxShadow: [
-          BoxShadow(
-            color: SSColors.purpleGlow.withValues(alpha: 0.3),
-            blurRadius: 20, offset: const Offset(0, -4),
-          ),
-        ],
+        boxShadow: [BoxShadow(
+          color: SSColors.purpleGlow.withValues(alpha: 0.3),
+          blurRadius: 20, offset: const Offset(0, -4),
+        )],
       ),
       child: SafeArea(
         child: Padding(
@@ -411,32 +472,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 child: GestureDetector(
                   onTap: () => setState(() => _navIndex = i),
                   behavior: HitTestBehavior.opaque,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: active ? SSColors.purpleGlowFaint : Colors.transparent,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(
-                          items[i].icon,
-                          color: active ? SSColors.purple : SSColors.textMuted,
-                          size: 22,
-                        ),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: active ? SSColors.purpleGlowFaint : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        items[i].label,
-                        style: SSTextStyles.labelSmall.copyWith(
-                          color: active ? SSColors.purple : SSColors.textMuted,
-                          fontWeight: active ? FontWeight.w700 : FontWeight.w400,
-                        ),
-                      ),
-                    ],
-                  ),
+                      child: Icon(items[i].icon,
+                        color: active ? SSColors.purple : SSColors.textMuted, size: 22),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(items[i].label,
+                      style: SSTextStyles.labelSmall.copyWith(
+                        color: active ? SSColors.purple : SSColors.textMuted,
+                        fontWeight: active ? FontWeight.w700 : FontWeight.w400,
+                      )),
+                  ]),
                 ),
               );
             }),
@@ -448,15 +501,72 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 }
 
 // ─────────────────────────────────────────────
-// STREAM SECTION WRAPPERS (updated with onTap)
+// ✅ NEW: FILTER CHIP ROW
+// Horizontally scrollable category chips
+// ─────────────────────────────────────────────
+class _FilterChipRow extends StatelessWidget {
+  final String   selected;
+  final void Function(String) onChanged;
+  const _FilterChipRow({required this.selected, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
+        children: _filterOptions.map((opt) {
+          final active = selected == opt.value;
+          return GestureDetector(
+            onTap: () => onChanged(opt.value),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOutCubic,
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: active ? SSColors.purpleGlowFaint : SSColors.surfaceCard,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: active
+                      ? SSColors.purple.withValues(alpha: 0.65)
+                      : SSColors.border,
+                  width: active ? 1.5 : 1,
+                ),
+                boxShadow: active ? [BoxShadow(
+                  color: SSColors.purpleGlow.withValues(alpha: 0.4),
+                  blurRadius: 8,
+                )] : null,
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Text(opt.emoji, style: const TextStyle(fontSize: 14)),
+                const SizedBox(width: 6),
+                Text(opt.label, style: TextStyle(
+                  color: active ? SSColors.purpleLight : SSColors.textMuted,
+                  fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.2,
+                )),
+              ]),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// STREAM SECTION WRAPPERS
 // ─────────────────────────────────────────────
 
 class _FeaturedSection extends StatelessWidget {
-  final Stream<TournamentModel?> stream;
-  final Animation<double>        pulse;
-  final void Function(TournamentModel) onTap; // ← NEW
+  final Stream<TournamentModel?>         stream;
+  final Animation<double>                pulse;
+  final Set<String>                      joinedIds; // ← NEW
+  final void Function(TournamentModel)   onTap;
   const _FeaturedSection({
-    required this.stream, required this.pulse, required this.onTap,
+    required this.stream, required this.pulse,
+    required this.joinedIds, required this.onTap,
   });
 
   @override
@@ -474,7 +584,10 @@ class _FeaturedSection extends StatelessWidget {
           return _EmptyCard(message: 'No featured tournament right now.');
         }
         return _FeaturedBanner(
-          tournament: snap.data!, pulse: pulse, onTap: onTap,
+          tournament: snap.data!,
+          pulse:      pulse,
+          isJoined:   joinedIds.contains(snap.data!.id), // ← NEW
+          onTap:      onTap,
         );
       },
     );
@@ -484,9 +597,12 @@ class _FeaturedSection extends StatelessWidget {
 class _LiveSection extends StatelessWidget {
   final Stream<List<TournamentModel>>  stream;
   final Animation<double>              pulse;
-  final void Function(TournamentModel) onTap; // ← NEW
+  final Set<String>                    joinedIds;  // ← NEW
+  final String                         typeFilter; // ← NEW
+  final void Function(TournamentModel) onTap;
   const _LiveSection({
-    required this.stream, required this.pulse, required this.onTap,
+    required this.stream, required this.pulse,
+    required this.joinedIds, required this.typeFilter, required this.onTap,
   });
 
   @override
@@ -500,20 +616,32 @@ class _LiveSection extends StatelessWidget {
         if (snap.hasError) {
           return _ErrorCard(message: 'Could not load live tournaments.');
         }
-        final list = snap.data ?? [];
+        // ✅ Apply client-side type filter
+        final list = (snap.data ?? []).where((t) {
+          if (typeFilter == 'all') return true;
+          return t.tournamentType == typeFilter;
+        }).toList();
+
         if (list.isEmpty) {
-          return _EmptyCard(message: 'No live tournaments right now.');
+          return _EmptyCard(message: typeFilter == 'all'
+              ? 'No live tournaments right now.'
+              : 'No live ${_filterLabel(typeFilter)} tournaments.');
         }
         return SizedBox(
-          height: 200,
+          height: 210,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
             padding: const EdgeInsets.symmetric(horizontal: 20),
             itemCount: list.length,
             separatorBuilder: (_, _) => const SizedBox(width: 12),
             itemBuilder: (ctx, i) => GestureDetector(
               onTap: () => onTap(list[i]),
-              child: _LiveTournamentCard(tournament: list[i], pulse: pulse, index: i),
+              child: _LiveTournamentCard(
+                tournament: list[i],
+                pulse: pulse, index: i,
+                isJoined: joinedIds.contains(list[i].id), // ← NEW
+              ),
             ),
           ),
         );
@@ -524,8 +652,13 @@ class _LiveSection extends StatelessWidget {
 
 class _UpcomingSection extends StatelessWidget {
   final Stream<List<TournamentModel>>  stream;
-  final void Function(TournamentModel) onTap; // ← NEW
-  const _UpcomingSection({required this.stream, required this.onTap});
+  final Set<String>                    joinedIds;  // ← NEW
+  final String                         typeFilter; // ← NEW
+  final void Function(TournamentModel) onTap;
+  const _UpcomingSection({
+    required this.stream, required this.joinedIds,
+    required this.typeFilter, required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -538,20 +671,32 @@ class _UpcomingSection extends StatelessWidget {
         if (snap.hasError) {
           return _ErrorCard(message: 'Could not load upcoming tournaments.');
         }
-        final list = snap.data ?? [];
+        // ✅ Apply client-side type filter
+        final list = (snap.data ?? []).where((t) {
+          if (typeFilter == 'all') return true;
+          return t.tournamentType == typeFilter;
+        }).toList();
+
         if (list.isEmpty) {
-          return _EmptyCard(message: 'No upcoming tournaments. Check back soon!');
+          return _EmptyCard(message: typeFilter == 'all'
+              ? 'No upcoming tournaments. Check back soon!'
+              : 'No upcoming ${_filterLabel(typeFilter)} tournaments.');
         }
         return SizedBox(
-          height: 220,
+          height: 230,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
             padding: const EdgeInsets.symmetric(horizontal: 20),
             itemCount: list.length,
             separatorBuilder: (_, _) => const SizedBox(width: 14),
             itemBuilder: (ctx, i) => GestureDetector(
               onTap: () => onTap(list[i]),
-              child: _UpcomingTournamentCard(tournament: list[i], index: i),
+              child: _UpcomingTournamentCard(
+                tournament: list[i],
+                index: i,
+                isJoined: joinedIds.contains(list[i].id), // ← NEW
+              ),
             ),
           ),
         );
@@ -560,11 +705,554 @@ class _UpcomingSection extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────
-// LOADING / ERROR / EMPTY STATE WIDGETS
-// (unchanged from original)
-// ─────────────────────────────────────────────
+String _filterLabel(String type) {
+  switch (type) {
+    case 'battle_royale': return 'Full Map';
+    case 'clash_squad':   return 'Clash Squad';
+    case 'lone_wolf':     return 'Lone Wolf';
+    case 'league':        return 'League';
+    default:              return type;
+  }
+}
 
+// ─────────────────────────────────────────────
+// SECTION HEADER  (now with onSeeAll callback)
+// ─────────────────────────────────────────────
+class _SectionHeader extends StatelessWidget {
+  final String        title;
+  final String        accent;
+  final bool          isLive;
+  final VoidCallback? onSeeAll; // ← NEW
+  const _SectionHeader({
+    required this.title, required this.accent,
+    this.isLive = false, this.onSeeAll,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(children: [
+        Container(
+          width: 3, height: 18,
+          decoration: BoxDecoration(
+            color: isLive ? SSColors.live : SSColors.purple,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(title, style: SSTextStyles.labelLarge.copyWith(fontSize: 12, letterSpacing: 1.5)),
+        const SizedBox(width: 5),
+        Text(accent, style: SSTextStyles.labelLarge.copyWith(
+          fontSize: 12, letterSpacing: 1.5,
+          color: isLive ? SSColors.live : SSColors.purple,
+        )),
+        if (isLive) ...[
+          const SizedBox(width: 8),
+          _LiveDot(),
+        ],
+        const Spacer(),
+        // ✅ See All — now tappable
+        GestureDetector(
+          onTap: onSeeAll,
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text('See All', style: SSTextStyles.labelLarge.copyWith(
+                color: SSColors.purple, fontSize: 11,
+              )),
+              const Icon(Icons.chevron_right_rounded, color: SSColors.purple, size: 16),
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// FEATURED BANNER  (updated with joined state)
+// ─────────────────────────────────────────────
+class _FeaturedBanner extends StatefulWidget {
+  final TournamentModel               tournament;
+  final Animation<double>             pulse;
+  final bool                          isJoined; // ← NEW
+  final void Function(TournamentModel) onTap;
+  const _FeaturedBanner({
+    required this.tournament, required this.pulse,
+    required this.isJoined, required this.onTap,
+  });
+
+  @override
+  State<_FeaturedBanner> createState() => _FeaturedBannerState();
+}
+
+class _FeaturedBannerState extends State<_FeaturedBanner>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _hoverCtrl;
+  bool _pressed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _hoverCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 150));
+  }
+  @override
+  void dispose() { _hoverCtrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.tournament;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: GestureDetector(
+        onTap: () => widget.onTap(t),
+        onTapDown:  (_) => setState(() => _pressed = true),
+        onTapUp:    (_) => setState(() => _pressed = false),
+        onTapCancel: () => setState(() => _pressed = false),
+        child: AnimatedScale(
+          scale: _pressed ? 0.98 : 1.0,
+          duration: const Duration(milliseconds: 120),
+          child: AnimatedBuilder(
+            animation: widget.pulse,
+            builder: (_, child) => Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [BoxShadow(
+                  color: SSColors.purple.withValues(
+                    alpha: widget.isJoined
+                        ? 0.0
+                        : 0.15 + 0.12 * widget.pulse.value,
+                  ),
+                  blurRadius: 24 + 8 * widget.pulse.value,
+                )],
+              ),
+              child: child,
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: Container(
+                height: 200,
+                decoration: BoxDecoration(
+                  color: SSColors.surfaceCard,
+                  borderRadius: const BorderRadius.all(Radius.circular(20)),
+                  image: (t.bannerUrl != null && t.bannerUrl!.isNotEmpty)
+                      ? DecorationImage(
+                          image: NetworkImage(t.bannerUrl!),
+                          fit: BoxFit.cover,
+                          colorFilter: ColorFilter.mode(
+                            SSColors.background.withValues(alpha: 0.55),
+                            BlendMode.darken,
+                          ),
+                        )
+                      : null,
+                ),
+                child: Stack(children: [
+                  if (t.bannerUrl == null || t.bannerUrl!.isEmpty)
+                    Positioned.fill(child: CustomPaint(
+                      painter: _GeometricPainter(
+                        color: SSColors.purple.withValues(alpha: 0.04),
+                      ),
+                    )),
+                  Positioned.fill(child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(20),
+                      gradient: LinearGradient(
+                        begin: Alignment.topRight, end: Alignment.bottomLeft,
+                        colors: [
+                          SSColors.purpleDim.withValues(alpha: 0.3),
+                          SSColors.background.withValues(alpha: 0.9),
+                        ],
+                      ),
+                    ),
+                  )),
+                  Positioned.fill(child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: widget.isJoined
+                            ? SSColors.success.withValues(alpha: 0.4)
+                            : SSColors.borderBright,
+                        width: widget.isJoined ? 1.5 : 1,
+                      ),
+                    ),
+                  )),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(children: [
+                        Flexible(child: _Badge(label: t.modeDisplay, color: SSColors.purpleDim)),
+                        const SizedBox(width: 8),
+                        Flexible(child: _Badge(
+                          label: t.startTimeDisplay,
+                          color: SSColors.surfaceElevated,
+                          textColor: SSColors.gold,
+                        )),
+                        const Spacer(),
+                        // ✅ NEW: Joined badge top-right on featured banner
+                        if (widget.isJoined)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: SSColors.success.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: SSColors.success.withValues(alpha: 0.4)),
+                            ),
+                            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                              Icon(Icons.check_circle_rounded, color: SSColors.success, size: 10),
+                              SizedBox(width: 4),
+                              Text('JOINED', style: TextStyle(
+                                color: SSColors.success, fontSize: 9,
+                                fontWeight: FontWeight.w800, letterSpacing: 0.8,
+                              )),
+                            ]),
+                          ),
+                      ]),
+                      const Spacer(),
+                      Text(t.title,
+                        style: SSTextStyles.displayLarge.copyWith(
+                          height: 1.1,
+                          shadows: [Shadow(color: SSColors.purple.withValues(alpha: 0.5), blurRadius: 12)],
+                        ),
+                        maxLines: 2, overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(t.subtitle, style: SSTextStyles.bodyMedium, overflow: TextOverflow.ellipsis),
+                      const SizedBox(height: 12),
+                      Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                        _InfoColumn(label: 'PRIZE POOL',
+                          valueWidget: Text(t.prizePoolDisplay, style: SSTextStyles.monoPrize, overflow: TextOverflow.ellipsis)),
+                        const SizedBox(width: 16),
+                        _InfoColumn(label: 'ENTRY',
+                          valueWidget: Text(t.entryFeeDisplay, style: SSTextStyles.titleMedium.copyWith(color: SSColors.textPrimary), overflow: TextOverflow.ellipsis)),
+                        const SizedBox(width: 16),
+                        _InfoColumn(label: 'SLOTS LEFT',
+                          valueWidget: Text('${t.slotsLeft}', style: SSTextStyles.titleMedium.copyWith(
+                            color: t.isAlmostFull ? SSColors.live : SSColors.textPrimary))),
+                        const Spacer(),
+                        // ✅ Button changes to "JOINED" state
+                        widget.isJoined
+                            ? _FeaturedJoinedBadge()
+                            : _JoinButton(
+                                entryFeeDisplay: t.entryFeeDisplay,
+                                featured: true,
+                                onTap: () => widget.onTap(t),
+                              ),
+                      ]),
+                    ]),
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Featured "JOINED" inline badge
+class _FeaturedJoinedBadge extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: SSColors.success.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: SSColors.success.withValues(alpha: 0.4)),
+      ),
+      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.check_rounded, color: SSColors.success, size: 13),
+        SizedBox(width: 4),
+        Text('JOINED', style: TextStyle(
+          color: SSColors.success, fontSize: 12,
+          fontWeight: FontWeight.w800, letterSpacing: 1,
+        )),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// UPCOMING CARD  (updated with joined state)
+// ─────────────────────────────────────────────
+class _UpcomingTournamentCard extends StatefulWidget {
+  final TournamentModel tournament;
+  final int             index;
+  final bool            isJoined; // ← NEW
+  const _UpcomingTournamentCard({
+    required this.tournament, required this.index, required this.isJoined,
+  });
+
+  @override
+  State<_UpcomingTournamentCard> createState() => _UpcomingTournamentCardState();
+}
+
+class _UpcomingTournamentCardState extends State<_UpcomingTournamentCard>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double>   _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
+    _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack);
+    Future.delayed(Duration(milliseconds: 100 + widget.index * 100), () {
+      if (mounted) _ctrl.forward();
+    });
+  }
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final t          = widget.tournament;
+    final almostFull = t.isAlmostFull;
+
+    return ScaleTransition(
+      scale: _anim,
+      child: SizedBox(
+        width: 190,
+        child: Container(
+          decoration: BoxDecoration(
+            color: SSColors.surfaceCard,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: widget.isJoined
+                  ? SSColors.success.withValues(alpha: 0.35)
+                  : SSColors.border,
+              width: widget.isJoined ? 1.5 : 1,
+            ),
+            boxShadow: [BoxShadow(
+              color: widget.isJoined
+                  ? SSColors.success.withValues(alpha: 0.06)
+                  : SSColors.purple.withValues(alpha: 0.08),
+              blurRadius: 16,
+            )],
+          ),
+          child: Stack(children: [
+            Positioned(top: -30, right: -30, child: Container(
+              width: 100, height: 100,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: (widget.isJoined ? SSColors.success : SSColors.purple).withValues(alpha: 0.04),
+              ),
+            )),
+            Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Flexible(child: _Badge(
+                    label: t.mode, color: SSColors.purpleDark, textColor: SSColors.purpleLight,
+                  )),
+                  if (almostFull && !widget.isJoined) ...[
+                    const SizedBox(width: 4),
+                    _Badge(label: 'HOT', color: SSColors.live.withValues(alpha: 0.2), textColor: SSColors.live),
+                  ],
+                  if (widget.isJoined) ...[
+                    const SizedBox(width: 4),
+                    // ✅ Joined type badge
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: SSColors.success.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(color: SSColors.success.withValues(alpha: 0.3)),
+                      ),
+                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.check_rounded, color: SSColors.success, size: 8),
+                        SizedBox(width: 3),
+                        Text('IN', style: TextStyle(
+                          color: SSColors.success, fontSize: 8, fontWeight: FontWeight.w800,
+                        )),
+                      ]),
+                    ),
+                  ],
+                ]),
+                const SizedBox(height: 10),
+                Text(t.title, style: SSTextStyles.titleMedium.copyWith(fontSize: 16, height: 1.15),
+                  maxLines: 2, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text(t.subtitle, style: SSTextStyles.bodyMedium.copyWith(fontSize: 11),
+                  overflow: TextOverflow.ellipsis),
+                const Spacer(),
+                Row(children: [
+                  const Icon(Icons.emoji_events_rounded, color: SSColors.gold, size: 13),
+                  const SizedBox(width: 4),
+                  Expanded(child: Text(t.prizePoolDisplay,
+                    style: SSTextStyles.titleSmall.copyWith(color: SSColors.gold, fontSize: 13),
+                    overflow: TextOverflow.ellipsis)),
+                ]),
+                const SizedBox(height: 8),
+                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  Text('${t.slotsLeft} left',
+                    style: SSTextStyles.labelSmall.copyWith(
+                      color: almostFull ? SSColors.live : SSColors.textMuted)),
+                  Flexible(child: Text(t.startTimeDisplay,
+                    style: SSTextStyles.labelSmall, overflow: TextOverflow.ellipsis)),
+                ]),
+                const SizedBox(height: 4),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: t.fillPercent, minHeight: 3,
+                    backgroundColor: SSColors.surfaceElevated,
+                    valueColor: AlwaysStoppedAnimation(almostFull ? SSColors.live : SSColors.purple),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(children: [
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('ENTRY', style: SSTextStyles.labelSmall),
+                    Text(t.entryFeeDisplay, style: SSTextStyles.titleSmall),
+                  ]),
+                  const Spacer(),
+                  // ✅ Show "JOINED" or normal button
+                  widget.isJoined
+                      ? _SmallJoinedBadge()
+                      : _JoinButton(entryFeeDisplay: t.entryFeeDisplay),
+                ]),
+              ]),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// LIVE TOURNAMENT CARD  (updated with joined state)
+// ─────────────────────────────────────────────
+class _LiveTournamentCard extends StatelessWidget {
+  final TournamentModel   tournament;
+  final Animation<double> pulse;
+  final int               index;
+  final bool              isJoined; // ← NEW
+  const _LiveTournamentCard({
+    required this.tournament, required this.pulse,
+    required this.index, required this.isJoined,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = tournament;
+    return AnimatedBuilder(
+      animation: pulse,
+      builder: (_, child) => Container(
+        width: 260,
+        decoration: BoxDecoration(
+          color: SSColors.surfaceCard,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: isJoined
+                ? SSColors.success.withValues(alpha: 0.4)
+                : SSColors.live.withValues(alpha: 0.3 + 0.2 * pulse.value),
+            width: isJoined ? 1.5 : 1,
+          ),
+          boxShadow: [BoxShadow(
+            color: isJoined
+                ? SSColors.success.withValues(alpha: 0.05)
+                : SSColors.live.withValues(alpha: 0.07 + 0.05 * pulse.value),
+            blurRadius: 16,
+          )],
+        ),
+        child: child,
+      ),
+      child: Stack(children: [
+        Positioned.fill(child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: CustomPaint(painter: _GeometricPainter(
+            color: SSColors.live.withValues(alpha: 0.03),
+          )),
+        )),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: SSColors.live.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: SSColors.live.withValues(alpha: 0.4), width: 0.5),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  _LiveDot(),
+                  const SizedBox(width: 5),
+                  Text('LIVE', style: SSTextStyles.labelSmall.copyWith(
+                    color: SSColors.live, fontWeight: FontWeight.w800, letterSpacing: 1,
+                  )),
+                ]),
+              ),
+              const Spacer(),
+              // ✅ Joined badge in header
+              if (isJoined)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: SSColors.success.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: SSColors.success.withValues(alpha: 0.3)),
+                  ),
+                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.check_circle_rounded, color: SSColors.success, size: 10),
+                    SizedBox(width: 3),
+                    Text('JOINED', style: TextStyle(
+                      color: SSColors.success, fontSize: 9,
+                      fontWeight: FontWeight.w800, letterSpacing: 0.5,
+                    )),
+                  ]),
+                )
+              else
+                Flexible(child: Text(t.mode, style: SSTextStyles.labelSmall, overflow: TextOverflow.ellipsis)),
+            ]),
+            const SizedBox(height: 10),
+            Text(t.title, style: SSTextStyles.titleLarge.copyWith(fontSize: 17),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 2),
+            Text(t.subtitle, style: SSTextStyles.bodyMedium.copyWith(fontSize: 11),
+              overflow: TextOverflow.ellipsis),
+            const Spacer(),
+            Row(children: [
+              Flexible(child: _InfoPill(
+                icon: Icons.emoji_events_rounded, label: t.prizePoolDisplay, color: SSColors.gold,
+              )),
+              const SizedBox(width: 8),
+              _InfoPill(
+                icon: Icons.people_rounded, label: '${t.joinedPlayers}/${t.maxPlayers}',
+                color: SSColors.textSecondary,
+              ),
+            ]),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {},
+                icon: const Icon(Icons.visibility_rounded, size: 15),
+                label: const Text('WATCH LIVE'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: SSColors.live,
+                  side: const BorderSide(color: SSColors.live, width: 1),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  textStyle: SSTextStyles.labelLarge.copyWith(color: SSColors.live, letterSpacing: 1),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// LOADING / ERROR / EMPTY STATES
+// ─────────────────────────────────────────────
 class _ShimmerPlaceholder extends StatefulWidget {
   final double height;
   const _ShimmerPlaceholder({required this.height});
@@ -666,19 +1354,14 @@ class _ErrorCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: SSColors.surfaceCard,
-          borderRadius: BorderRadius.circular(14),
+          color: SSColors.surfaceCard, borderRadius: BorderRadius.circular(14),
           border: Border.all(color: SSColors.live.withValues(alpha: 0.3)),
         ),
-        child: Row(
-          children: [
-            const Icon(Icons.error_outline_rounded, color: SSColors.live, size: 18),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(message, style: SSTextStyles.bodyMedium.copyWith(fontSize: 12)),
-            ),
-          ],
-        ),
+        child: Row(children: [
+          const Icon(Icons.error_outline_rounded, color: SSColors.live, size: 18),
+          const SizedBox(width: 10),
+          Expanded(child: Text(message, style: SSTextStyles.bodyMedium.copyWith(fontSize: 12))),
+        ]),
       ),
     );
   }
@@ -695,26 +1378,21 @@ class _EmptyCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: SSColors.surfaceCard,
-          borderRadius: BorderRadius.circular(14),
+          color: SSColors.surfaceCard, borderRadius: BorderRadius.circular(14),
           border: Border.all(color: SSColors.border),
         ),
-        child: Row(
-          children: [
-            const Icon(Icons.info_outline_rounded, color: SSColors.textMuted, size: 18),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(message, style: SSTextStyles.bodyMedium.copyWith(fontSize: 12)),
-            ),
-          ],
-        ),
+        child: Row(children: [
+          const Icon(Icons.info_outline_rounded, color: SSColors.textMuted, size: 18),
+          const SizedBox(width: 10),
+          Expanded(child: Text(message, style: SSTextStyles.bodyMedium.copyWith(fontSize: 12))),
+        ]),
       ),
     );
   }
 }
 
 // ─────────────────────────────────────────────
-// STATS BAR — ✅ Points chip removed
+// STATS BAR
 // ─────────────────────────────────────────────
 class _StatsBar extends StatelessWidget {
   const _StatsBar();
@@ -723,36 +1401,20 @@ class _StatsBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        children: [
-          _StatChip(
-            icon:  Icons.emoji_events_rounded,
-            label: 'Tournaments',
-            value: '12',
-            color: SSColors.gold,
-          ),
-          const SizedBox(width: 10),
-          _StatChip(
-            icon:  Icons.military_tech_rounded,
-            label: 'Wins',
-            value: '5',
-            color: SSColors.purple,
-          ),
-        ],
-      ),
+      child: Row(children: [
+        _StatChip(icon: Icons.emoji_events_rounded, label: 'Tournaments', value: '12', color: SSColors.gold),
+        const SizedBox(width: 10),
+        _StatChip(icon: Icons.military_tech_rounded, label: 'Wins', value: '5', color: SSColors.purple),
+      ]),
     );
   }
 }
 
 class _StatChip extends StatelessWidget {
   final IconData icon;
-  final String   label;
-  final String   value;
-  final Color    color;
-  const _StatChip({
-    required this.icon, required this.label,
-    required this.value, required this.color,
-  });
+  final String label, value;
+  final Color color;
+  const _StatChip({required this.icon, required this.label, required this.value, required this.color});
 
   @override
   Widget build(BuildContext context) {
@@ -760,80 +1422,51 @@ class _StatChip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         decoration: BoxDecoration(
-          color: SSColors.surfaceCard,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: SSColors.border, width: 1),
+          color: SSColors.surfaceCard, borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: SSColors.border),
         ),
-        child: Row(
-          children: [
-            Icon(icon, color: color, size: 15),
-            const SizedBox(width: 5),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(value,
-                    style: SSTextStyles.titleSmall.copyWith(color: color, fontSize: 13),
-                    overflow: TextOverflow.ellipsis),
-                  Text(label, style: SSTextStyles.labelSmall, overflow: TextOverflow.ellipsis),
-                ],
-              ),
-            ),
-          ],
-        ),
+        child: Row(children: [
+          Icon(icon, color: color, size: 15),
+          const SizedBox(width: 5),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(value, style: SSTextStyles.titleSmall.copyWith(color: color, fontSize: 13),
+              overflow: TextOverflow.ellipsis),
+            Text(label, style: SSTextStyles.labelSmall, overflow: TextOverflow.ellipsis),
+          ])),
+        ]),
       ),
     );
   }
 }
 
 // ─────────────────────────────────────────────
-// SECTION HEADER
+// SMALL JOINED BADGE (on cards bottom row)
 // ─────────────────────────────────────────────
-class _SectionHeader extends StatelessWidget {
-  final String title;
-  final String accent;
-  final bool   isLive;
-  const _SectionHeader({
-    required this.title, required this.accent, this.isLive = false,
-  });
-
+class _SmallJoinedBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        children: [
-          Container(
-            width: 3, height: 18,
-            decoration: BoxDecoration(
-              color: isLive ? SSColors.live : SSColors.purple,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(title, style: SSTextStyles.labelLarge.copyWith(
-            fontSize: 12, letterSpacing: 1.5,
-          )),
-          const SizedBox(width: 5),
-          Text(accent, style: SSTextStyles.labelLarge.copyWith(
-            fontSize: 12, letterSpacing: 1.5,
-            color: isLive ? SSColors.live : SSColors.purple,
-          )),
-          if (isLive) ...[
-            const SizedBox(width: 8),
-            _LiveDot(),
-          ],
-          const Spacer(),
-          Text('See All', style: SSTextStyles.labelLarge.copyWith(
-            color: SSColors.purple, fontSize: 11,
-          )),
-          const Icon(Icons.chevron_right_rounded, color: SSColors.purple, size: 16),
-        ],
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: SSColors.success.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: SSColors.success.withValues(alpha: 0.35)),
       ),
+      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.check_rounded, color: SSColors.success, size: 11),
+        SizedBox(width: 4),
+        Text('JOINED', style: TextStyle(
+          color: SSColors.success, fontSize: 10,
+          fontWeight: FontWeight.w800, letterSpacing: 0.5,
+        )),
+      ]),
     );
   }
 }
 
+// ─────────────────────────────────────────────
+// LIVE DOT (unchanged)
+// ─────────────────────────────────────────────
 class _LiveDot extends StatefulWidget {
   @override
   State<_LiveDot> createState() => _LiveDotState();
@@ -870,491 +1503,7 @@ class _LiveDotState extends State<_LiveDot> with SingleTickerProviderStateMixin 
 }
 
 // ─────────────────────────────────────────────
-// FEATURED BANNER (updated with onTap)
-// ─────────────────────────────────────────────
-class _FeaturedBanner extends StatefulWidget {
-  final TournamentModel               tournament;
-  final Animation<double>             pulse;
-  final void Function(TournamentModel) onTap; // ← NEW
-  const _FeaturedBanner({
-    required this.tournament, required this.pulse, required this.onTap,
-  });
-
-  @override
-  State<_FeaturedBanner> createState() => _FeaturedBannerState();
-}
-
-class _FeaturedBannerState extends State<_FeaturedBanner>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _hoverCtrl;
-  bool _pressed = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _hoverCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 150),
-    );
-  }
-  @override
-  void dispose() { _hoverCtrl.dispose(); super.dispose(); }
-
-  @override
-  Widget build(BuildContext context) {
-    final t = widget.tournament;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: GestureDetector(
-        onTap: () => widget.onTap(t), // ← tap opens details
-        onTapDown:  (_) => setState(() => _pressed = true),
-        onTapUp:    (_) => setState(() => _pressed = false),
-        onTapCancel: () => setState(() => _pressed = false),
-        child: AnimatedScale(
-          scale: _pressed ? 0.98 : 1.0,
-          duration: const Duration(milliseconds: 120),
-          child: AnimatedBuilder(
-            animation: widget.pulse,
-            builder: (_, child) => Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: SSColors.purple.withValues(
-                        alpha: 0.15 + 0.12 * widget.pulse.value),
-                    blurRadius: 24 + 8 * widget.pulse.value,
-                    spreadRadius: 0,
-                  ),
-                ],
-              ),
-              child: child,
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(20),
-              child: Container(
-                height: 200,
-                decoration: BoxDecoration(
-                  color: SSColors.surfaceCard,
-                  borderRadius: const BorderRadius.all(Radius.circular(20)),
-                  image: t.bannerUrl != null && t.bannerUrl!.isNotEmpty
-                      ? DecorationImage(
-                          image: NetworkImage(t.bannerUrl!),
-                          fit: BoxFit.cover,
-                          colorFilter: ColorFilter.mode(
-                            SSColors.background.withValues(alpha: 0.55),
-                            BlendMode.darken,
-                          ),
-                        )
-                      : null,
-                ),
-                child: Stack(
-                  children: [
-                    if (t.bannerUrl == null || t.bannerUrl!.isEmpty)
-                      Positioned.fill(child: _GeometricPattern()),
-                    Positioned.fill(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(20),
-                          gradient: LinearGradient(
-                            begin: Alignment.topRight,
-                            end: Alignment.bottomLeft,
-                            colors: [
-                              SSColors.purpleDim.withValues(alpha: 0.3),
-                              SSColors.background.withValues(alpha: 0.9),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    Positioned.fill(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: SSColors.borderBright, width: 1),
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Flexible(child: _Badge(
-                                label: t.modeDisplay,
-                                color: SSColors.purpleDim,
-                              )),
-                              const SizedBox(width: 8),
-                              Flexible(child: _Badge(
-                                label: t.startTimeDisplay,
-                                color: SSColors.surfaceElevated,
-                                textColor: SSColors.gold,
-                              )),
-                            ],
-                          ),
-                          const Spacer(),
-                          Text(t.title,
-                            style: SSTextStyles.displayLarge.copyWith(
-                              height: 1.1,
-                              shadows: [Shadow(
-                                color: SSColors.purple.withValues(alpha: 0.5),
-                                blurRadius: 12,
-                              )],
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 4),
-                          Text(t.subtitle, style: SSTextStyles.bodyMedium,
-                            overflow: TextOverflow.ellipsis),
-                          const SizedBox(height: 12),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              _InfoColumn(
-                                label: 'PRIZE POOL',
-                                valueWidget: Text(t.prizePoolDisplay,
-                                  style: SSTextStyles.monoPrize,
-                                  overflow: TextOverflow.ellipsis),
-                              ),
-                              const SizedBox(width: 16),
-                              _InfoColumn(
-                                label: 'ENTRY',
-                                valueWidget: Text(t.entryFeeDisplay,
-                                  style: SSTextStyles.titleMedium.copyWith(
-                                    color: SSColors.textPrimary),
-                                  overflow: TextOverflow.ellipsis),
-                              ),
-                              const SizedBox(width: 16),
-                              _InfoColumn(
-                                label: 'SLOTS LEFT',
-                                valueWidget: Text('${t.slotsLeft}',
-                                  style: SSTextStyles.titleMedium.copyWith(
-                                    color: t.isAlmostFull
-                                        ? SSColors.live
-                                        : SSColors.textPrimary)),
-                              ),
-                              const Spacer(),
-                              _JoinButton(
-                                entryFeeDisplay: t.entryFeeDisplay,
-                                featured: true,
-                                onTap: () => widget.onTap(t),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────
-// UPCOMING TOURNAMENT CARD (tappable via parent GestureDetector)
-// ─────────────────────────────────────────────
-class _UpcomingTournamentCard extends StatefulWidget {
-  final TournamentModel tournament;
-  final int             index;
-  const _UpcomingTournamentCard({required this.tournament, required this.index});
-
-  @override
-  State<_UpcomingTournamentCard> createState() => _UpcomingTournamentCardState();
-}
-
-class _UpcomingTournamentCardState extends State<_UpcomingTournamentCard>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-  late Animation<double>   _anim;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 500),
-    );
-    _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack);
-    Future.delayed(Duration(milliseconds: 100 + widget.index * 100), () {
-      if (mounted) _ctrl.forward();
-    });
-  }
-  @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
-
-  @override
-  Widget build(BuildContext context) {
-    final t          = widget.tournament;
-    final almostFull = t.isAlmostFull;
-    final slotsPercent = t.fillPercent;
-
-    return ScaleTransition(
-      scale: _anim,
-      child: SizedBox(
-        width: 190,
-        child: Container(
-          decoration: BoxDecoration(
-            color: SSColors.surfaceCard,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: SSColors.border, width: 1),
-            boxShadow: [
-              BoxShadow(
-                color: SSColors.purple.withValues(alpha: 0.08),
-                blurRadius: 16, spreadRadius: 0,
-              ),
-            ],
-          ),
-          child: Stack(
-            children: [
-              Positioned(
-                top: -30, right: -30,
-                child: Container(
-                  width: 100, height: 100,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: SSColors.purple.withValues(alpha: 0.05),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Flexible(child: _Badge(
-                          label: t.mode,
-                          color: SSColors.purpleDark,
-                          textColor: SSColors.purpleLight,
-                        )),
-                        if (almostFull) ...[
-                          const SizedBox(width: 4),
-                          _Badge(
-                            label: 'HOT',
-                            color: SSColors.live.withValues(alpha: 0.2),
-                            textColor: SSColors.live,
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Text(t.title,
-                      style: SSTextStyles.titleMedium.copyWith(
-                        fontSize: 16, height: 1.15),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 2),
-                    Text(t.subtitle,
-                      style: SSTextStyles.bodyMedium.copyWith(fontSize: 11),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const Spacer(),
-                    Row(
-                      children: [
-                        const Icon(Icons.emoji_events_rounded,
-                          color: SSColors.gold, size: 13),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(t.prizePoolDisplay,
-                            style: SSTextStyles.titleSmall.copyWith(
-                              color: SSColors.gold, fontSize: 13),
-                            overflow: TextOverflow.ellipsis),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text('${t.slotsLeft} left',
-                          style: SSTextStyles.labelSmall.copyWith(
-                            color: almostFull ? SSColors.live : SSColors.textMuted)),
-                        Flexible(
-                          child: Text(t.startTimeDisplay,
-                            style: SSTextStyles.labelSmall,
-                            overflow: TextOverflow.ellipsis),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: slotsPercent,
-                        minHeight: 3,
-                        backgroundColor: SSColors.surfaceElevated,
-                        valueColor: AlwaysStoppedAnimation(
-                          almostFull ? SSColors.live : SSColors.purple,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('ENTRY', style: SSTextStyles.labelSmall),
-                            Text(t.entryFeeDisplay, style: SSTextStyles.titleSmall),
-                          ],
-                        ),
-                        const Spacer(),
-                        _JoinButton(entryFeeDisplay: t.entryFeeDisplay),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────
-// LIVE TOURNAMENT CARD (tappable via parent)
-// ─────────────────────────────────────────────
-class _LiveTournamentCard extends StatelessWidget {
-  final TournamentModel   tournament;
-  final Animation<double> pulse;
-  final int               index;
-  const _LiveTournamentCard({
-    required this.tournament, required this.pulse, required this.index,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final t = tournament;
-    return AnimatedBuilder(
-      animation: pulse,
-      builder: (_, child) => Container(
-        width: 260,
-        decoration: BoxDecoration(
-          color: SSColors.surfaceCard,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: SSColors.live.withValues(alpha: 0.3 + 0.2 * pulse.value),
-            width: 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: SSColors.live.withValues(alpha: 0.07 + 0.05 * pulse.value),
-              blurRadius: 16, spreadRadius: 0,
-            ),
-          ],
-        ),
-        child: child,
-      ),
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(18),
-              child: _GeometricPattern(
-                color: SSColors.live.withValues(alpha: 0.03),
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: SSColors.live.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                          color: SSColors.live.withValues(alpha: 0.4), width: 0.5),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _LiveDot(),
-                          const SizedBox(width: 5),
-                          Text('LIVE', style: SSTextStyles.labelSmall.copyWith(
-                            color: SSColors.live,
-                            fontWeight: FontWeight.w800, letterSpacing: 1,
-                          )),
-                        ],
-                      ),
-                    ),
-                    const Spacer(),
-                    Flexible(
-                      child: Text(t.mode,
-                        style: SSTextStyles.labelSmall,
-                        overflow: TextOverflow.ellipsis),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Text(t.title,
-                  style: SSTextStyles.titleLarge.copyWith(fontSize: 17),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 2),
-                Text(t.subtitle,
-                  style: SSTextStyles.bodyMedium.copyWith(fontSize: 11),
-                  overflow: TextOverflow.ellipsis),
-                const Spacer(),
-                Row(
-                  children: [
-                    Flexible(
-                      child: _InfoPill(
-                        icon: Icons.emoji_events_rounded,
-                        label: t.prizePoolDisplay,
-                        color: SSColors.gold,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _InfoPill(
-                      icon: Icons.people_rounded,
-                      label: '${t.joinedPlayers}/${t.maxPlayers}',
-                      color: SSColors.textSecondary,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () {},
-                    icon: const Icon(Icons.visibility_rounded, size: 15),
-                    label: const Text('WATCH LIVE'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: SSColors.live,
-                      side: const BorderSide(color: SSColors.live, width: 1),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      textStyle: SSTextStyles.labelLarge.copyWith(
-                        color: SSColors.live, letterSpacing: 1),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────
-// REUSABLE WIDGETS (unchanged)
+// REUSABLE SMALL WIDGETS (unchanged)
 // ─────────────────────────────────────────────
 class _InfoColumn extends StatelessWidget {
   final String label;
@@ -1363,24 +1512,18 @@ class _InfoColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(label, style: SSTextStyles.labelSmall),
-        valueWidget,
-      ],
-    );
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      Text(label, style: SSTextStyles.labelSmall),
+      valueWidget,
+    ]);
   }
 }
 
 class _JoinButton extends StatefulWidget {
-  final String     entryFeeDisplay;
-  final bool       featured;
-  final VoidCallback? onTap; // ← optional tap override
-  const _JoinButton({
-    required this.entryFeeDisplay, this.featured = false, this.onTap,
-  });
+  final String       entryFeeDisplay;
+  final bool         featured;
+  final VoidCallback? onTap;
+  const _JoinButton({required this.entryFeeDisplay, this.featured = false, this.onTap});
 
   @override
   State<_JoinButton> createState() => _JoinButtonState();
@@ -1396,8 +1539,7 @@ class _JoinButtonState extends State<_JoinButton>
     super.initState();
     _ctrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 120));
     _scale = Tween(begin: 1.0, end: 0.95).animate(
-      CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
-    );
+        CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
   }
   @override
   void dispose() { _ctrl.dispose(); super.dispose(); }
@@ -1418,17 +1560,13 @@ class _JoinButtonState extends State<_JoinButton>
           decoration: BoxDecoration(
             gradient: const LinearGradient(
               colors: [SSColors.purple, SSColors.purpleDim],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+              begin: Alignment.topLeft, end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(10),
-            boxShadow: [
-              BoxShadow(
-                color: SSColors.purple.withValues(alpha: 0.4),
-                blurRadius: 12, spreadRadius: 0,
-                offset: const Offset(0, 4),
-              ),
-            ],
+            boxShadow: [BoxShadow(
+              color: SSColors.purple.withValues(alpha: 0.4),
+              blurRadius: 12, offset: const Offset(0, 4),
+            )],
           ),
           child: Text(
             widget.featured ? 'JOIN NOW' : 'JOIN',
@@ -1453,17 +1591,12 @@ class _Badge extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color, borderRadius: BorderRadius.circular(6),
-      ),
-      child: Text(
-        label,
+      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(6)),
+      child: Text(label,
         style: SSTextStyles.labelSmall.copyWith(
-          color: textColor ?? SSColors.textSecondary,
-          fontWeight: FontWeight.w700,
+          color: textColor ?? SSColors.textSecondary, fontWeight: FontWeight.w700,
         ),
-        overflow: TextOverflow.ellipsis,
-      ),
+        overflow: TextOverflow.ellipsis),
     );
   }
 }
@@ -1476,16 +1609,11 @@ class _InfoPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, color: color, size: 12),
-        const SizedBox(width: 4),
-        Text(label,
-          style: SSTextStyles.labelSmall.copyWith(color: color),
-          overflow: TextOverflow.ellipsis),
-      ],
-    );
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(icon, color: color, size: 12),
+      const SizedBox(width: 4),
+      Text(label, style: SSTextStyles.labelSmall.copyWith(color: color), overflow: TextOverflow.ellipsis),
+    ]);
   }
 }
 
@@ -1493,9 +1621,7 @@ class _GlowContainer extends StatelessWidget {
   final Widget child;
   final Color  glowColor;
   final double borderRadius;
-  const _GlowContainer({
-    required this.child, required this.glowColor, required this.borderRadius,
-  });
+  const _GlowContainer({required this.child, required this.glowColor, required this.borderRadius});
 
   @override
   Widget build(BuildContext context) {
@@ -1505,20 +1631,6 @@ class _GlowContainer extends StatelessWidget {
         boxShadow: [BoxShadow(color: glowColor, blurRadius: 10)],
       ),
       child: child,
-    );
-  }
-}
-
-class _GeometricPattern extends StatelessWidget {
-  final Color? color;
-  const _GeometricPattern({this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: _GeometricPainter(
-        color: color ?? SSColors.purple.withValues(alpha: 0.04),
-      ),
     );
   }
 }
@@ -1538,16 +1650,17 @@ class _GeometricPainter extends CustomPainter {
         canvas.drawCircle(Offset(c * spacing, r * spacing), 1.2, dotPaint);
       }
     }
-    final accentPaint = Paint()
+    final linePaint = Paint()
       ..color = color.withValues(alpha: 0.7)
       ..strokeWidth = 0.5;
     for (var i = 0; i < 6; i++) {
       final x = size.width * (0.5 + i * 0.15);
-      canvas.drawLine(Offset(x, 0), Offset(x - size.height * 0.5, size.height), accentPaint);
+      canvas.drawLine(Offset(x, 0), Offset(x - size.height * 0.5, size.height), linePaint);
     }
   }
+
   @override
-  bool shouldRepaint(covariant CustomPainter _) => false;
+  bool shouldRepaint(covariant _GeometricPainter old) => old.color != color;
 }
 
 class _NavItem {
