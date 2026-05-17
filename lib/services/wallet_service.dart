@@ -1,21 +1,4 @@
 // lib/services/wallet_service.dart
-// ─────────────────────────────────────────────
-// WALLET SERVICE  — Shadow Storm
-// Handles all Firestore read/write for:
-//   • wallet data (balance, earnings, deposits, withdrawals)
-//   • deposit_requests/
-//   • withdraw_requests/
-//   • wallet_transactions/
-//
-// NOTE: Firebase Storage and image_picker removed.
-//       Screenshot upload is no longer required.
-//       Users send screenshots manually via Discord / Telegram.
-//
-// SECURITY RULE:
-//   Frontend NEVER directly modifies walletBalance.
-//   All balance updates happen via admin approval logic on backend.
-// ─────────────────────────────────────────────
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -23,7 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 // DATA MODELS
 // ─────────────────────────────────────────────
 
-/// Wallet summary data for the Balance Overview card.
+/// Live wallet summary streamed from users/{uid}.
 class WalletData {
   final double balance;
   final double totalEarnings;
@@ -37,36 +20,33 @@ class WalletData {
     required this.totalWithdrawals,
   });
 
-  factory WalletData.fromDoc(Map<String, dynamic> data) {
-    return WalletData(
-      balance:          (data['walletBalance']    ?? 0).toDouble(),
-      totalEarnings:    (data['totalEarnings']    ?? 0).toDouble(),
-      totalDeposits:    (data['totalDeposits']    ?? 0).toDouble(),
-      totalWithdrawals: (data['totalWithdrawals'] ?? 0).toDouble(),
-    );
-  }
+  factory WalletData.fromDoc(Map<String, dynamic> d) => WalletData(
+        balance:          (d['walletBalance']    ?? 0).toDouble(),
+        totalEarnings:    (d['totalEarnings']    ?? 0).toDouble(),
+        totalDeposits:    (d['totalDeposits']    ?? 0).toDouble(),
+        totalWithdrawals: (d['totalWithdrawals'] ?? 0).toDouble(),
+      );
 
-  static WalletData get empty => const WalletData(
+  static const empty = WalletData(
     balance: 0, totalEarnings: 0, totalDeposits: 0, totalWithdrawals: 0,
   );
 }
 
-/// A single deposit request document.
-/// screenshotUrl removed — users send screenshots manually via Discord/Telegram.
+/// users/{uid}/deposit_requests/{id}
 class DepositRequest {
   final String   id;
-  final String   uid;
   final double   amount;
   final String   utr;
-  final String   status;   // pending | approved | rejected
+  final String   status;    // pending | approved | rejected
+  final String?  adminNote;
   final DateTime createdAt;
 
   const DepositRequest({
     required this.id,
-    required this.uid,
     required this.amount,
     required this.utr,
     required this.status,
+    this.adminNote,
     required this.createdAt,
   });
 
@@ -74,32 +54,31 @@ class DepositRequest {
     final d = doc.data() as Map<String, dynamic>;
     return DepositRequest(
       id:        doc.id,
-      uid:       d['uid']      ?? '',
       amount:    (d['amount']  ?? 0).toDouble(),
-      utr:       d['utr']      ?? '',
-      status:    d['status']   ?? 'pending',
+      utr:       d['utr']      as String? ?? '',
+      status:    d['status']   as String? ?? 'pending',
+      adminNote: d['adminNote'] as String?,
       createdAt: (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );
   }
 }
 
-/// A single withdraw request document.
+/// users/{uid}/withdraw_requests/{id}
 class WithdrawRequest {
   final String   id;
-  final String   uid;
   final double   amount;
-  final String   method;         // upi | bank
+  final String   method;          // upi | bank
   final String   upiId;
   final String   accountHolder;
   final String   bankName;
   final String   accountNumber;
   final String   ifscCode;
-  final String   status;         // pending | approved | rejected
+  final String   status;          // pending | approved | rejected
+  final String?  adminNote;
   final DateTime createdAt;
 
   const WithdrawRequest({
     required this.id,
-    required this.uid,
     required this.amount,
     required this.method,
     required this.upiId,
@@ -108,6 +87,7 @@ class WithdrawRequest {
     required this.accountNumber,
     required this.ifscCode,
     required this.status,
+    this.adminNote,
     required this.createdAt,
   });
 
@@ -115,38 +95,36 @@ class WithdrawRequest {
     final d = doc.data() as Map<String, dynamic>;
     return WithdrawRequest(
       id:            doc.id,
-      uid:           d['uid']           ?? '',
       amount:        (d['amount']       ?? 0).toDouble(),
-      method:        d['method']        ?? 'upi',
-      upiId:         d['upiId']         ?? '',
-      accountHolder: d['accountHolder'] ?? '',
-      bankName:      d['bankName']      ?? '',
-      accountNumber: d['accountNumber'] ?? '',
-      ifscCode:      d['ifscCode']      ?? '',
-      status:        d['status']        ?? 'pending',
+      method:        d['method']        as String? ?? 'upi',
+      upiId:         d['upiId']         as String? ?? '',
+      accountHolder: d['accountHolder'] as String? ?? '',
+      bankName:      d['bankName']      as String? ?? '',
+      accountNumber: d['accountNumber'] as String? ?? '',
+      ifscCode:      d['ifscCode']      as String? ?? '',
+      status:        d['status']        as String? ?? 'pending',
+      adminNote:     d['adminNote']     as String?,
       createdAt:     (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );
   }
 }
 
-/// A single transaction record.
+/// users/{uid}/transactions/{id}
 class WalletTransaction {
   final String   id;
-  final String   uid;
   final double   amount;
-  final String   type;    // deposit | withdrawal | tournament_entry | winnings | refund
-  final String   status;  // pending | completed | failed
-  final String?  note;
+  final String   type;     // deposit | withdrawal | tournament_entry | winnings | refund
+  final String   status;   // pending | completed | failed
+  final String?  description;
   final String?  tournamentId;
   final DateTime createdAt;
 
   const WalletTransaction({
     required this.id,
-    required this.uid,
     required this.amount,
     required this.type,
     required this.status,
-    this.note,
+    this.description,
     this.tournamentId,
     required this.createdAt,
   });
@@ -155,17 +133,16 @@ class WalletTransaction {
     final d = doc.data() as Map<String, dynamic>;
     return WalletTransaction(
       id:           doc.id,
-      uid:          d['uid']          ?? '',
-      amount:       (d['amount']      ?? 0).toDouble(),
-      type:         d['type']         ?? 'deposit',
-      status:       d['status']       ?? 'pending',
-      note:         d['note'],
-      tournamentId: d['tournamentId'],
+      amount:       (d['amount']   ?? 0).toDouble(),
+      type:         d['type']      as String? ?? 'deposit',
+      status:       d['status']    as String? ?? 'pending',
+      description:  d['description'] as String?,
+      tournamentId: d['tournamentId'] as String?,
       createdAt:    (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );
   }
 
-  /// True for money coming IN (deposit, winnings, refund).
+  /// Credits: deposit, winnings, refund → money coming IN.
   bool get isCredit =>
       type == 'deposit' || type == 'winnings' || type == 'refund';
 }
@@ -174,66 +151,65 @@ class WalletTransaction {
 // WALLET SERVICE
 // ─────────────────────────────────────────────
 class WalletService {
-  // ── Singleton ─────────────────────────────
   WalletService._();
   static final WalletService instance = WalletService._();
 
-  // ── Firebase ──────────────────────────────
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth      _auth      = FirebaseAuth.instance;
+  final FirebaseFirestore _db   = FirebaseFirestore.instance;
+  final FirebaseAuth      _auth = FirebaseAuth.instance;
 
   String? get _uid => _auth.currentUser?.uid;
 
+  // ── Subcollection references ───────────────
+
+  CollectionReference _depositCol(String uid) =>
+      _db.collection('users').doc(uid).collection('deposit_requests');
+
+  CollectionReference _withdrawCol(String uid) =>
+      _db.collection('users').doc(uid).collection('withdraw_requests');
+
+  CollectionReference _txCol(String uid) =>
+      _db.collection('users').doc(uid).collection('transactions');
+
   // ──────────────────────────────────────────
-  // WALLET DATA — realtime stream
+  // WALLET SUMMARY STREAM
   // ──────────────────────────────────────────
 
-  /// Stream of [WalletData] from users/{uid}.
-  /// Emits every time the user document changes.
+  /// Realtime stream of [WalletData] from users/{uid}.
   Stream<WalletData> walletDataStream() {
     final uid = _uid;
     if (uid == null) return Stream.value(WalletData.empty);
-
-    return _firestore
-        .collection('users')
-        .doc(uid)
-        .snapshots()
-        .map((snap) {
-          if (!snap.exists) return WalletData.empty;
-          return WalletData.fromDoc(snap.data()!);
-        });
+    return _db.collection('users').doc(uid).snapshots().map((snap) {
+      if (!snap.exists) return WalletData.empty;
+      return WalletData.fromDoc(snap.data()!);
+    });
   }
 
   // ──────────────────────────────────────────
-  // DEPOSIT REQUEST
+  // DEPOSIT REQUESTS
+  // Path: users/{uid}/deposit_requests/{id}
   // ──────────────────────────────────────────
 
-  /// Creates a deposit request in Firestore.
-  /// No screenshot upload — user sends proof manually via Discord/Telegram.
-  /// Throws on any error.
   Future<void> submitDepositRequest({
     required double amount,
     required String utr,
   }) async {
     final uid = _uid;
-    if (uid == null) throw Exception('User not logged in.');
+    if (uid == null) throw Exception('Not logged in.');
 
-    // Prevent duplicate UTR submissions within the last 24 hours
-    final existing = await _firestore
-        .collection('deposit_requests')
-        .where('uid', isEqualTo: uid)
+    final col = _depositCol(uid);
+
+    // Reject duplicate UTR within this user's deposit history
+    final dup = await col
         .where('utr', isEqualTo: utr.trim())
         .limit(1)
         .get();
-
-    if (existing.docs.isNotEmpty) {
+    if (dup.docs.isNotEmpty) {
       throw Exception(
           'A deposit request with this UTR already exists. '
-          'If this is a mistake, contact support on Discord or Telegram.');
+          'Contact support on Discord or Telegram if this is a mistake.');
     }
 
-    await _firestore.collection('deposit_requests').add({
-      'uid':       uid,
+    await col.add({
       'amount':    amount,
       'utr':       utr.trim(),
       'status':    'pending',
@@ -241,25 +217,21 @@ class WalletService {
     });
   }
 
-  /// Stream of this user's deposit requests, newest-first.
+  /// Realtime stream of this user's deposit requests, newest-first.
   Stream<List<DepositRequest>> depositRequestsStream() {
     final uid = _uid;
     if (uid == null) return Stream.value([]);
-
-    return _firestore
-        .collection('deposit_requests')
-        .where('uid', isEqualTo: uid)
+    return _depositCol(uid)
         .orderBy('createdAt', descending: true)
         .snapshots()
-        .map((snap) => snap.docs.map(DepositRequest.fromDoc).toList());
+        .map((s) => s.docs.map(DepositRequest.fromDoc).toList());
   }
 
   // ──────────────────────────────────────────
-  // WITHDRAW REQUEST
+  // WITHDRAW REQUESTS
+  // Path: users/{uid}/withdraw_requests/{id}
   // ──────────────────────────────────────────
 
-  /// Creates a document in withdraw_requests/.
-  /// Does NOT touch walletBalance — admin approves and deducts server-side.
   Future<void> submitWithdrawRequest({
     required double amount,
     required String method,
@@ -270,132 +242,124 @@ class WalletService {
     required String ifscCode,
   }) async {
     final uid = _uid;
-    if (uid == null) throw Exception('User not logged in.');
+    if (uid == null) throw Exception('Not logged in.');
 
-    // Read-only balance check (admin enforces server-side)
-    final userDoc = await _firestore.collection('users').doc(uid).get();
-    final balance = (userDoc.data()?['walletBalance'] ?? 0).toDouble();
+    // Read-only balance guard (admin enforces server-side too)
+    final snap = await _db.collection('users').doc(uid).get();
+    final balance = (snap.data()?['walletBalance'] ?? 0).toDouble();
     if (amount > balance) {
       throw Exception(
           'Insufficient balance. Available: ₹${balance.toStringAsFixed(2)}');
     }
 
-    // Prevent pending duplicate withdrawal
-    final pending = await _firestore
-        .collection('withdraw_requests')
-        .where('uid', isEqualTo: uid)
+    final col = _withdrawCol(uid);
+
+    // Prevent duplicate pending withdrawal
+    final pending = await col
         .where('status', isEqualTo: 'pending')
         .limit(1)
         .get();
-
     if (pending.docs.isNotEmpty) {
       throw Exception(
-          'You already have a pending withdrawal request. '
-          'Please wait for it to be processed before submitting a new one.');
+          'You already have a pending withdrawal. '
+          'Wait for it to be processed before submitting a new one.');
     }
 
-    await _firestore.collection('withdraw_requests').add({
-      'uid':           uid,
+    await col.add({
       'amount':        amount,
       'method':        method,
-      'upiId':         upiId,
-      'accountHolder': accountHolder,
-      'bankName':      bankName,
-      'accountNumber': accountNumber,
-      'ifscCode':      ifscCode,
+      'upiId':         upiId.trim(),
+      'accountHolder': accountHolder.trim(),
+      'bankName':      bankName.trim(),
+      'accountNumber': accountNumber.trim(),
+      'ifscCode':      ifscCode.trim().toUpperCase(),
       'status':        'pending',
       'createdAt':     FieldValue.serverTimestamp(),
     });
   }
 
-  /// Stream of this user's withdrawal requests, newest-first.
+  /// Realtime stream of this user's withdrawal requests, newest-first.
   Stream<List<WithdrawRequest>> withdrawRequestsStream() {
     final uid = _uid;
     if (uid == null) return Stream.value([]);
-
-    return _firestore
-        .collection('withdraw_requests')
-        .where('uid', isEqualTo: uid)
+    return _withdrawCol(uid)
         .orderBy('createdAt', descending: true)
         .snapshots()
-        .map((snap) => snap.docs.map(WithdrawRequest.fromDoc).toList());
+        .map((s) => s.docs.map(WithdrawRequest.fromDoc).toList());
   }
 
   // ──────────────────────────────────────────
   // TRANSACTION HISTORY
+  // Path: users/{uid}/transactions/{id}
   // ──────────────────────────────────────────
 
-  /// Stream of this user's wallet transactions, newest-first.
+  /// Realtime stream of this user's transactions, newest-first.
   Stream<List<WalletTransaction>> transactionsStream() {
     final uid = _uid;
     if (uid == null) return Stream.value([]);
-
-    return _firestore
-        .collection('wallet_transactions')
-        .where('uid', isEqualTo: uid)
+    return _txCol(uid)
         .orderBy('createdAt', descending: true)
         .snapshots()
-        .map((snap) => snap.docs.map(WalletTransaction.fromDoc).toList());
+        .map((s) => s.docs.map(WalletTransaction.fromDoc).toList());
   }
 }
 
 // ─────────────────────────────────────────────
-// FIRESTORE COLLECTIONS — STRUCTURE REFERENCE
+// FIRESTORE STRUCTURE REFERENCE
 // ─────────────────────────────────────────────
 //
 // users/{uid}
-//   uid              : string   (set on first login)
+//   uid              : string
 //   name             : string
 //   email            : string
 //   photoUrl         : string
-//   walletBalance    : number   ← MANAGED BY ADMIN/BACKEND ONLY
-//   totalEarnings    : number   ← MANAGED BY ADMIN/BACKEND ONLY
-//   totalDeposits    : number   ← MANAGED BY ADMIN/BACKEND ONLY
-//   totalWithdrawals : number   ← MANAGED BY ADMIN/BACKEND ONLY
+//   walletBalance    : number   ← BACKEND ONLY
+//   totalEarnings    : number   ← BACKEND ONLY
+//   totalDeposits    : number   ← BACKEND ONLY
+//   totalWithdrawals : number   ← BACKEND ONLY
 //   wins             : number
 //   tournamentsPlayed: number
-//   rankPoints       : number
 //
-// deposit_requests/{id}
-//   uid       : string
-//   amount    : number
-//   utr       : string
-//   status    : 'pending' | 'approved' | 'rejected'
-//   createdAt : timestamp
-//   [adminNote: string]  ← optional, set by admin on approval/rejection
-//
-// withdraw_requests/{id}
-//   uid          : string
-//   amount       : number
-//   method       : 'upi' | 'bank'
-//   upiId        : string
-//   accountHolder: string
-//   bankName     : string
-//   accountNumber: string
-//   ifscCode     : string
-//   status       : 'pending' | 'approved' | 'rejected'
-//   createdAt    : timestamp
-//   [adminNote: string]  ← optional, set by admin
-//
-// wallet_transactions/{id}
-//   uid          : string
-//   amount       : number
-//   type         : 'deposit' | 'withdrawal' | 'tournament_entry' | 'winnings' | 'refund'
-//   status       : 'pending' | 'completed' | 'failed'
-//   note         : string  (optional)
-//   tournamentId : string  (optional)
-//   createdAt    : timestamp
+//   ├── deposit_requests/{id}
+//   │     amount    : number
+//   │     utr       : string
+//   │     status    : 'pending' | 'approved' | 'rejected'
+//   │     adminNote : string (optional, set by admin)
+//   │     createdAt : timestamp
+//   │
+//   ├── withdraw_requests/{id}
+//   │     amount        : number
+//   │     method        : 'upi' | 'bank'
+//   │     upiId         : string
+//   │     accountHolder : string
+//   │     bankName      : string
+//   │     accountNumber : string
+//   │     ifscCode      : string
+//   │     status        : 'pending' | 'approved' | 'rejected'
+//   │     adminNote     : string (optional)
+//   │     createdAt     : timestamp
+//   │
+//   └── transactions/{id}
+//         amount       : number
+//         type         : 'deposit'|'withdrawal'|'tournament_entry'|'winnings'|'refund'
+//         status       : 'pending' | 'completed' | 'failed'
+//         description  : string (optional)
+//         tournamentId : string (optional)
+//         createdAt    : timestamp
 //
 // ─────────────────────────────────────────────
-// REQUIRED FIRESTORE INDEXES (create in Firebase Console)
+// REQUIRED FIRESTORE INDEXES
 // ─────────────────────────────────────────────
-// Collection: deposit_requests
-//   Fields: uid ASC, createdAt DESC
+// All subcollection queries are on a single field with orderBy createdAt DESC.
+// Firestore auto-indexes single-field queries, so NO composite indexes needed
+// for subcollections. The only indexes you may need:
 //
-// Collection: withdraw_requests
-//   Fields: uid ASC, createdAt DESC
-//   Fields: uid ASC, status ASC  (for pending-duplicate check)
+// users/{uid}/deposit_requests — orderBy: createdAt DESC  (auto-indexed)
+// users/{uid}/withdraw_requests — orderBy: createdAt DESC (auto-indexed)
+// users/{uid}/transactions — orderBy: createdAt DESC      (auto-indexed)
 //
-// Collection: wallet_transactions
-//   Fields: uid ASC, createdAt DESC
+// For leaderboard (ranks_screen):
+// Collection: users
+//   Fields: totalEarnings DESC    (for winnings leaderboard)
+//   Fields: totalWithdrawals DESC (for withdrawals leaderboard)
 // ─────────────────────────────────────────────

@@ -1,28 +1,33 @@
 // lib/screens/ranks_screen.dart
 // ─────────────────────────────────────────────
-// RANKS SCREEN  (v1)
-// Weekly leaderboard based on:
-//   • Highest earnings
-//   • Highest tournament wins
-//   • Highest withdrawals
-// Features:
-//   • Top-3 animated podium
-//   • Tab-based leaderboard filter (Earnings / Wins / Withdrawals)
-//   • Animated entry cards
-//   • Realtime Firestore integration
-//   • Weekly reset label
+// RANKS SCREEN  — Shadow Storm  (v2)
+//
+// ONLY TWO LEADERBOARDS:
+//   1. Weekly Highest Winnings    (users ordered by totalEarnings DESC)
+//   2. Weekly Highest Withdrawals (users ordered by totalWithdrawals DESC)
+//
+// Player card shows ONLY:
+//   • Rank number
+//   • Profile image
+//   • Display name
+//   • Amount (winnings or withdrawals)
+//
+// Top 3 Podium: gold/silver/bronze, crown for #1
+//
+// ✅ Pushed via Navigator.push — Scaffold with its own back button
+// ✅ Same SSColors design language as HomeScreen / EventsScreen
+// ✅ No RP / points / badges / levels
 // ─────────────────────────────────────────────
 
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-// ─────────────────────────────────────────────
-// DESIGN TOKENS  (same as HomeScreen)
-// ─────────────────────────────────────────────
+// ── Design tokens (mirror SSColors) ────────────────────────────────────────
 class _C {
-  // static const background      = Color(0xFF06040E);
+  static const background      = Color(0xFF06040E);
   // static const surface         = Color(0xFF0E0A1A);
   static const surfaceCard     = Color(0xFF130F22);
   static const surfaceElevated = Color(0xFF1A1430);
@@ -30,7 +35,6 @@ class _C {
   static const purple          = Color(0xFF9D55FF);
   static const purpleLight     = Color(0xFFB07EF8);
   static const purpleDim       = Color(0xFF7B3FE4);
-  // static const purpleDark      = Color(0xFF3C2570);
   static const purpleGlow      = Color(0x559D55FF);
   static const purpleGlowFaint = Color(0x229D55FF);
 
@@ -42,7 +46,7 @@ class _C {
   // static const goldGlow        = Color(0x55FFCC44);
   static const silver          = Color(0xFFB8C7D4);
   static const bronze          = Color(0xFFCD7F32);
-  // static const live            = Color(0xFFFF4466);
+  static const live            = Color(0xFFFF4466);
   // static const success         = Color(0xFF44FF99);
 
   static const border          = Color(0x337B3FE4);
@@ -51,81 +55,56 @@ class _C {
 
 // ─────────────────────────────────────────────
 // LEADERBOARD ENTRY MODEL
+// Read directly from users/ collection.
+// Fields used: name, photoUrl, totalEarnings, totalWithdrawals
 // ─────────────────────────────────────────────
-class LeaderboardEntry {
+class _LbEntry {
   final String uid;
   final String name;
-  final String ign;          // In-Game Name
   final String photoUrl;
-  final double totalEarnings;
-  final int    totalWins;
-  final double totalWithdrawals;
-  final int    rank;
+  final double winnings;
+  final double withdrawals;
 
-  const LeaderboardEntry({
+  const _LbEntry({
     required this.uid,
     required this.name,
-    required this.ign,
     required this.photoUrl,
-    required this.totalEarnings,
-    required this.totalWins,
-    required this.totalWithdrawals,
-    required this.rank,
+    required this.winnings,
+    required this.withdrawals,
   });
 
-  factory LeaderboardEntry.fromMap(Map<String, dynamic> data, int rank) {
-    return LeaderboardEntry(
-      uid:               data['uid']               as String? ?? '',
-      name:              data['name']              as String? ?? 'Unknown',
-      ign:               data['ign']               as String? ?? 'Player',
-      photoUrl:          data['photoUrl']          as String? ?? '',
-      totalEarnings:     (data['totalEarnings']    as num?)?.toDouble() ?? 0.0,
-      totalWins:         (data['totalWins']        as num?)?.toInt()    ?? 0,
-      totalWithdrawals:  (data['totalWithdrawals'] as num?)?.toDouble() ?? 0.0,
-      rank:              rank,
+  factory _LbEntry.fromDoc(DocumentSnapshot doc) {
+    final d = doc.data() as Map<String, dynamic>? ?? {};
+    return _LbEntry(
+      uid:         doc.id,
+      name:        d['name']            as String? ?? 'Unknown',
+      photoUrl:    d['photoUrl']        as String? ?? '',
+      winnings:    (d['totalEarnings']    as num?)?.toDouble() ?? 0.0,
+      withdrawals: (d['totalWithdrawals'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }
 
 // ─────────────────────────────────────────────
 // LEADERBOARD SERVICE
-// Reads from Firestore: weekly_leaderboard/{weekId}/entries/
 // ─────────────────────────────────────────────
-class LeaderboardService {
-  static final LeaderboardService instance = LeaderboardService._();
-  LeaderboardService._();
+class _LbService {
+  static final _LbService instance = _LbService._();
+  _LbService._();
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  /// Returns the current ISO week id like "2025-W23"
-  String get _currentWeekId {
-    final now  = DateTime.now();
-    final jan1 = DateTime(now.year, 1, 1);
-    final week = ((now.difference(jan1).inDays + jan1.weekday) / 7).ceil();
-    return '${now.year}-W${week.toString().padLeft(2, '0')}';
-  }
-
-  /// Stream of leaderboard entries sorted by [sortField] descending.
-  /// Firestore collection: weekly_leaderboard/{weekId}/entries
-  Stream<List<LeaderboardEntry>> leaderboardStream(String sortField) {
+  /// Stream sorted by [field] descending, top 50 users.
+  Stream<List<_LbEntry>> stream(String field) {
     return _db
-        .collection('weekly_leaderboard')
-        .doc(_currentWeekId)
-        .collection('entries')
-        .orderBy(sortField, descending: true)
+        .collection('users')
+        .orderBy(field, descending: true)
         .limit(50)
         .snapshots()
-        .map((snap) {
-      return snap.docs.asMap().entries.map((e) {
-        return LeaderboardEntry.fromMap(
-          e.value.data(),
-          e.key + 1, // 1-based rank
-        );
-      }).toList();
-    });
+        .map((snap) => snap.docs.map(_LbEntry.fromDoc).toList());
   }
 
-  /// Week label e.g. "Week 23 · 2025"
+  // Week label e.g. "Week 23 · 2025"
   String get weekLabel {
     final now  = DateTime.now();
     final jan1 = DateTime(now.year, 1, 1);
@@ -133,13 +112,12 @@ class LeaderboardService {
     return 'Week $week · ${now.year}';
   }
 
-  /// Next Monday midnight (week reset)
   DateTime get nextReset {
-    final now  = DateTime.now();
-    final daysUntilMonday = (DateTime.monday - now.weekday + 7) % 7;
-    final reset = daysUntilMonday == 0
+    final now = DateTime.now();
+    final daysUntil = (DateTime.monday - now.weekday + 7) % 7;
+    final reset = daysUntil == 0
         ? now.add(const Duration(days: 7))
-        : now.add(Duration(days: daysUntilMonday));
+        : now.add(Duration(days: daysUntil));
     return DateTime(reset.year, reset.month, reset.day);
   }
 }
@@ -149,45 +127,42 @@ class LeaderboardService {
 // ─────────────────────────────────────────────
 class RanksScreen extends StatefulWidget {
   const RanksScreen({super.key});
-
-  @override
-  State<RanksScreen> createState() => _RanksScreenState();
+  @override State<RanksScreen> createState() => _RanksScreenState();
 }
 
 class _RanksScreenState extends State<RanksScreen>
     with TickerProviderStateMixin {
-
-  final LeaderboardService _svc = LeaderboardService.instance;
+  final _svc   = _LbService.instance;
   final String? _myUid = FirebaseAuth.instance.currentUser?.uid;
 
-  late TabController _tabCtrl;
-
-  // Tab config: label → Firestore field
-  static const _tabs = [
-    ('💰 Earnings',    'totalEarnings'),
-    ('🏆 Wins',        'totalWins'),
-    ('💸 Withdrawals', 'totalWithdrawals'),
-  ];
+  int _tabIndex = 0; // 0 = Winnings, 1 = Withdrawals
 
   late AnimationController _fadeCtrl;
+  late AnimationController _glowCtrl;
+  late AnimationController _particleCtrl;
   late Animation<double>   _fadeIn;
+  late Animation<double>   _glow;
+  late Animation<double>   _particle;
 
-  // Countdown timer
-  late Timer _countdownTimer;
+  Timer? _ticker;
   Duration _timeLeft = Duration.zero;
 
   @override
   void initState() {
     super.initState();
+    _fadeCtrl     = AnimationController(vsync: this,
+        duration: const Duration(milliseconds: 700))..forward();
+    _glowCtrl     = AnimationController(vsync: this,
+        duration: const Duration(milliseconds: 2400))..repeat(reverse: true);
+    _particleCtrl = AnimationController(vsync: this,
+        duration: const Duration(seconds: 8))..repeat();
 
-    _tabCtrl  = TabController(length: _tabs.length, vsync: this);
-    _fadeCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 700),
-    )..forward();
-    _fadeIn = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOutCubic);
+    _fadeIn   = CurvedAnimation(parent: _fadeCtrl,     curve: Curves.easeOutCubic);
+    _glow     = CurvedAnimation(parent: _glowCtrl,     curve: Curves.easeInOut);
+    _particle = CurvedAnimation(parent: _particleCtrl, curve: Curves.linear);
 
     _computeTimeLeft();
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(_computeTimeLeft);
     });
   }
@@ -199,102 +174,142 @@ class _RanksScreenState extends State<RanksScreen>
 
   @override
   void dispose() {
-    _tabCtrl.dispose();
     _fadeCtrl.dispose();
-    _countdownTimer.cancel();
+    _glowCtrl.dispose();
+    _particleCtrl.dispose();
+    _ticker?.cancel();
     super.dispose();
   }
 
   String _fmtCountdown(Duration d) {
-    final h  = d.inHours.remainder(24).toString().padLeft(2, '0');
-    final m  = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s  = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    final h = d.inHours.remainder(24).toString().padLeft(2, '0');
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '${d.inDays}d $h:$m:$s';
   }
 
+  // ─────────────────────────────────────────
+  // BUILD
+  // ─────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final topPad = MediaQuery.of(context).padding.top + 64 + 12;
-
-    return FadeTransition(
-      opacity: _fadeIn,
-      child: CustomScrollView(
-        physics: const BouncingScrollPhysics(),
-        slivers: [
-          SliverToBoxAdapter(child: SizedBox(height: topPad)),
-
-          // ── Header ──────────────────────────────
-          SliverToBoxAdapter(child: _buildHeader()),
-          const SliverToBoxAdapter(child: SizedBox(height: 16)),
-
-          // ── Tab bar ─────────────────────────────
-          SliverToBoxAdapter(child: _buildTabBar()),
-          const SliverToBoxAdapter(child: SizedBox(height: 20)),
-
-          // ── Tab content ─────────────────────────
-          SliverToBoxAdapter(child: _buildTabContent()),
-
-          const SliverToBoxAdapter(child: SizedBox(height: 100)),
-        ],
+    final topPad = MediaQuery.of(context).padding.top;
+    return Scaffold(
+      backgroundColor: _C.background,
+      body: FadeTransition(
+        opacity: _fadeIn,
+        child: Column(
+          children: [
+            SizedBox(height: topPad),
+            _buildHeader(),
+            _buildTabBar(),
+            Expanded(
+              child: IndexedStack(
+                index: _tabIndex,
+                children: [
+                  _LeaderboardView(
+                    sortField: 'totalEarnings',
+                    amountLabel: 'Winnings',
+                    formatAmount: (v) => '₹${v.toStringAsFixed(0)}',
+                    myUid: _myUid,
+                    service: _svc,
+                    glow: _glow,
+                    particle: _particle,
+                  ),
+                  _LeaderboardView(
+                    sortField: 'totalWithdrawals',
+                    amountLabel: 'Withdrawn',
+                    formatAmount: (v) => '₹${v.toStringAsFixed(0)}',
+                    myUid: _myUid,
+                    service: _svc,
+                    glow: _glow,
+                    particle: _particle,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  // ── HEADER ──────────────────────────────────
+  // ── HEADER ────────────────────────────────
   Widget _buildHeader() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Container(width: 3, height: 18,
-            decoration: BoxDecoration(
-              color: _C.gold, borderRadius: BorderRadius.circular(2),
-            )),
-          const SizedBox(width: 8),
-          Text('WEEKLY', style: const TextStyle(
-            color: _C.textSecondary, fontSize: 12,
-            fontWeight: FontWeight.w700, letterSpacing: 1.5,
-          )),
-          const SizedBox(width: 5),
-          Text('LEADERBOARD', style: const TextStyle(
-            color: _C.gold, fontSize: 12,
-            fontWeight: FontWeight.w700, letterSpacing: 1.5,
-          )),
-          const Spacer(),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Row(children: [
+        GestureDetector(
+          onTap: () => Navigator.pop(context),
+          child: Container(
+            width: 38, height: 38,
             decoration: BoxDecoration(
               color: _C.surfaceCard,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: _C.border),
             ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.timer_outlined, color: _C.gold, size: 13),
-              const SizedBox(width: 5),
-              Text(_fmtCountdown(_timeLeft), style: const TextStyle(
-                color: _C.gold, fontSize: 11, fontWeight: FontWeight.w800,
-                letterSpacing: 0.5,
-              )),
-            ]),
+            child: const Icon(Icons.arrow_back_ios_new_rounded,
+                color: _C.textSecondary, size: 16),
           ),
+        ),
+        const SizedBox(width: 12),
+        Container(
+          width: 3, height: 20,
+          decoration: BoxDecoration(
+              color: _C.gold, borderRadius: BorderRadius.circular(2)),
+        ),
+        const SizedBox(width: 8),
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Text('WEEKLY', style: TextStyle(
+              color: _C.textSecondary, fontSize: 14,
+              fontWeight: FontWeight.w900, letterSpacing: 1.5,
+            )),
+            const SizedBox(width: 6),
+            const Text('LEADERBOARD', style: TextStyle(
+              color: _C.gold, fontSize: 14,
+              fontWeight: FontWeight.w900, letterSpacing: 1.5,
+            )),
+          ]),
+          Text(_svc.weekLabel, style: const TextStyle(
+            color: _C.textMuted, fontSize: 10, fontWeight: FontWeight.w500,
+          )),
         ]),
-        const SizedBox(height: 6),
-        Text(_svc.weekLabel, style: const TextStyle(
-          color: _C.textMuted, fontSize: 11, fontWeight: FontWeight.w500,
-        )),
-        const SizedBox(height: 4),
-        const Text(
-          'Resets every Monday at midnight',
-          style: TextStyle(color: _C.textMuted, fontSize: 10),
+        const Spacer(),
+        // Reset countdown chip
+        AnimatedBuilder(
+          animation: _glow,
+          builder: (_, child) => Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: _C.surfaceCard,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _C.gold.withValues(
+                  alpha: 0.2 + 0.15 * _glow.value)),
+              boxShadow: [BoxShadow(
+                color: _C.gold.withValues(alpha: 0.08 * _glow.value),
+                blurRadius: 12,
+              )],
+            ),
+            child: child,
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.timer_outlined, color: _C.gold, size: 12),
+            const SizedBox(width: 5),
+            Text(_fmtCountdown(_timeLeft), style: const TextStyle(
+              color: _C.gold, fontSize: 10,
+              fontWeight: FontWeight.w800, letterSpacing: 0.4,
+            )),
+          ]),
         ),
       ]),
     );
   }
 
-  // ── TAB BAR ─────────────────────────────────
+  // ── TAB BAR — two tabs only ───────────────
   Widget _buildTabBar() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       child: Container(
         padding: const EdgeInsets.all(4),
         decoration: BoxDecoration(
@@ -302,115 +317,135 @@ class _RanksScreenState extends State<RanksScreen>
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: _C.border),
         ),
-        child: TabBar(
-          controller: _tabCtrl,
-          indicator: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [_C.purpleDim, _C.purple],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(10),
-            boxShadow: [BoxShadow(color: _C.purpleGlow, blurRadius: 8)],
+        child: Row(children: [
+          _TabChip(
+            label: '💰  Highest Winnings',
+            active: _tabIndex == 0,
+            onTap: () => setState(() => _tabIndex = 0),
           ),
-          indicatorSize: TabBarIndicatorSize.tab,
-          dividerColor: Colors.transparent,
-          labelColor: Colors.white,
-          unselectedLabelColor: _C.textMuted,
-          labelStyle: const TextStyle(
-            fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.3,
+          const SizedBox(width: 6),
+          _TabChip(
+            label: '💸  Highest Withdrawals',
+            active: _tabIndex == 1,
+            onTap: () => setState(() => _tabIndex = 1),
           ),
-          unselectedLabelStyle: const TextStyle(
-            fontSize: 11, fontWeight: FontWeight.w500,
-          ),
-          tabs: _tabs.map((t) => Tab(text: t.$1)).toList(),
-        ),
+        ]),
       ),
     );
   }
+}
 
-  // ── TAB CONTENT ─────────────────────────────
-  Widget _buildTabContent() {
-    return SizedBox(
-      // Needs a fixed height inside a CustomScrollView
-      height: MediaQuery.of(context).size.height * 0.85,
-      child: TabBarView(
-        controller: _tabCtrl,
-        children: _tabs.map((t) {
-          return _LeaderboardTabContent(
-            sortField: t.$2,
-            myUid:     _myUid,
-            service:   _svc,
-          );
-        }).toList(),
+class _TabChip extends StatelessWidget {
+  final String label;
+  final bool   active;
+  final VoidCallback onTap;
+  const _TabChip({required this.label, required this.active, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            gradient: active
+                ? const LinearGradient(
+                    colors: [_C.purpleDim, _C.purple],
+                    begin: Alignment.topLeft, end: Alignment.bottomRight,
+                  )
+                : null,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: active
+                ? [const BoxShadow(color: _C.purpleGlow, blurRadius: 8)]
+                : null,
+          ),
+          child: Text(label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: active ? Colors.white : _C.textMuted,
+              fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.3,
+            ),
+          ),
+        ),
       ),
     );
   }
 }
 
 // ─────────────────────────────────────────────
-// LEADERBOARD TAB CONTENT
-// Handles stream + podium + list
+// LEADERBOARD VIEW
 // ─────────────────────────────────────────────
-class _LeaderboardTabContent extends StatelessWidget {
-  final String             sortField;
-  final String?            myUid;
-  final LeaderboardService service;
+class _LeaderboardView extends StatelessWidget {
+  final String               sortField;
+  final String               amountLabel;
+  final String Function(double) formatAmount;
+  final String?              myUid;
+  final _LbService           service;
+  final Animation<double>    glow;
+  final Animation<double>    particle;
 
-  const _LeaderboardTabContent({
+  const _LeaderboardView({
     required this.sortField,
+    required this.amountLabel,
+    required this.formatAmount,
     required this.myUid,
     required this.service,
+    required this.glow,
+    required this.particle,
   });
+
+  double _getValue(_LbEntry e) =>
+      sortField == 'totalEarnings' ? e.winnings : e.withdrawals;
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<LeaderboardEntry>>(
-      stream: service.leaderboardStream(sortField),
+    return StreamBuilder<List<_LbEntry>>(
+      stream: service.stream(sortField),
       builder: (ctx, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(child: _LoadingIndicator());
+          return const _LoadingState();
         }
         if (snap.hasError) {
           return _ErrorState(message: 'Could not load leaderboard.');
         }
         final entries = snap.data ?? [];
         if (entries.isEmpty) {
-          return const _EmptyState(message: 'No data yet for this week.\nBe the first to compete!');
+          return const _EmptyState();
         }
 
-        return ListView(
-          physics: const NeverScrollableScrollPhysics(),
-          padding: EdgeInsets.zero,
-          children: [
-            // Podium (top 3)
-            if (entries.length >= 3) ...[
-              const SizedBox(height: 8),
-              _PodiumSection(
-                entries:   entries.take(3).toList(),
-                sortField: sortField,
-              ),
-              const SizedBox(height: 20),
-            ],
-
-            // Rest of list (4th onwards)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Column(
-                children: entries.skip(entries.length >= 3 ? 3 : 0)
-                    .toList()
-                    .asMap()
-                    .entries
-                    .map((e) => _LeaderboardCard(
-                          entry:     e.value,
-                          sortField: sortField,
-                          isMe:      e.value.uid == myUid,
-                          delay:     e.key,
-                        ))
-                    .toList(),
-              ),
-            ),
-          ],
+        return ListView.builder(
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+          itemCount: entries.length + 1, // +1 for podium at top
+          itemBuilder: (ctx, i) {
+            if (i == 0) {
+              // Podium: takes entries 0,1,2
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 20),
+                child: _Podium(
+                  entries: entries.take(3).toList(),
+                  getValue: _getValue,
+                  formatAmount: formatAmount,
+                  glow: glow,
+                  particle: particle,
+                  myUid: myUid,
+                ),
+              );
+            }
+            final entry = entries[i - 1];
+            final rank  = i;       // 1-based rank
+            // Hide top 3 from list (they're in the podium)
+            if (rank <= 3) return const SizedBox.shrink();
+            return _PlayerCard(
+              entry:        entry,
+              rank:         rank,
+              value:        _getValue(entry),
+              formatAmount: formatAmount,
+              isMe:         entry.uid == myUid,
+              animDelay:    (rank - 4) * 50,
+            );
+          },
         );
       },
     );
@@ -418,75 +453,108 @@ class _LeaderboardTabContent extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// PODIUM SECTION  — top 3 trophy display
+// PODIUM — top 3 with animated glow
 // ─────────────────────────────────────────────
-class _PodiumSection extends StatefulWidget {
-  final List<LeaderboardEntry> entries;   // exactly 3 entries
-  final String                 sortField;
-  const _PodiumSection({required this.entries, required this.sortField});
+class _Podium extends StatefulWidget {
+  final List<_LbEntry>         entries;
+  final double Function(_LbEntry) getValue;
+  final String Function(double) formatAmount;
+  final Animation<double>      glow;
+  final Animation<double>      particle;
+  final String?                myUid;
 
-  @override
-  State<_PodiumSection> createState() => _PodiumSectionState();
+  const _Podium({
+    required this.entries,
+    required this.getValue,
+    required this.formatAmount,
+    required this.glow,
+    required this.particle,
+    required this.myUid,
+  });
+
+  @override State<_Podium> createState() => _PodiumState();
 }
 
-class _PodiumSectionState extends State<_PodiumSection>
-    with SingleTickerProviderStateMixin {
+class _PodiumState extends State<_Podium> with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
   late Animation<double>   _anim;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 800));
+    _ctrl = AnimationController(vsync: this,
+        duration: const Duration(milliseconds: 900));
     _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack);
-    Future.delayed(const Duration(milliseconds: 100), () {
+    Future.delayed(const Duration(milliseconds: 80), () {
       if (mounted) _ctrl.forward();
     });
   }
+  @override void dispose() { _ctrl.dispose(); super.dispose(); }
 
-  @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  static const _platformHeights = [100.0, 130.0, 80.0]; // 2nd, 1st, 3rd
 
   @override
   Widget build(BuildContext context) {
-    // Reorder for podium display: 2nd | 1st | 3rd
-    final List<LeaderboardEntry?> podium = [
-      widget.entries.length > 1 ? widget.entries[1] : null,
-      widget.entries.isNotEmpty  ? widget.entries[0] : null,
-      widget.entries.length > 2 ? widget.entries[2] : null,
-    ];
-
-    final heights = [100.0, 130.0, 80.0]; // 2nd, 1st, 3rd platform heights
+    // Podium order: [2nd, 1st, 3rd]
+    final _LbEntry? second = widget.entries.length > 1 ? widget.entries[1] : null;
+    final _LbEntry? first  = widget.entries.isNotEmpty  ? widget.entries[0] : null;
+    final _LbEntry? third  = widget.entries.length > 2  ? widget.entries[2] : null;
+    final order = [second, first, third];
+    final ranks = [2, 1, 3];
 
     return ScaleTransition(
       scale: _anim,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Container(
-          padding: const EdgeInsets.all(20),
+      child: AnimatedBuilder(
+        animation: widget.glow,
+        builder: (_, child) => Container(
+          margin: const EdgeInsets.symmetric(horizontal: 0),
+          padding: const EdgeInsets.fromLTRB(12, 20, 12, 0),
           decoration: BoxDecoration(
             color: _C.surfaceCard,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: _C.border),
-            gradient: const LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xFF1E1535), _C.surfaceCard],
+            borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(24)),
+            border: Border.all(color: _C.gold.withValues(
+                alpha: 0.1 + 0.08 * widget.glow.value)),
+            boxShadow: [
+              BoxShadow(
+                color: _C.gold.withValues(
+                    alpha: 0.05 + 0.04 * widget.glow.value),
+                blurRadius: 30,
+              ),
+              BoxShadow(
+                color: _C.purple.withValues(
+                    alpha: 0.08 + 0.05 * widget.glow.value),
+                blurRadius: 40,
+              ),
+            ],
+          ),
+          child: Stack(children: [
+            // Particle background
+            SizedBox(
+              height: 220,
+              width: double.infinity,
+              child: AnimatedBuilder(
+                animation: widget.particle,
+                builder: (_, _) => CustomPaint(
+                  painter: _PodiumParticlePainter(widget.particle.value),
+                ),
+              ),
             ),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: List.generate(3, (i) {
-              final entry = podium[i];
-              final rankNum = i == 0 ? 2 : (i == 1 ? 1 : 3);
-              return Expanded(child: _PodiumSlot(
-                entry:    entry,
-                rank:     rankNum,
-                height:   heights[i],
-                sortField: widget.sortField,
-              ));
-            }),
-          ),
+            child!,
+          ]),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: List.generate(3, (i) {
+            return Expanded(child: _PodiumSlot(
+              entry:        order[i],
+              rank:         ranks[i],
+              platformH:    _platformHeights[i],
+              getValue:     widget.getValue,
+              formatAmount: widget.formatAmount,
+              isMe:         order[i]?.uid == widget.myUid,
+            ));
+          }),
         ),
       ),
     );
@@ -494,14 +562,20 @@ class _PodiumSectionState extends State<_PodiumSection>
 }
 
 class _PodiumSlot extends StatelessWidget {
-  final LeaderboardEntry? entry;
-  final int               rank;
-  final double            height;
-  final String            sortField;
+  final _LbEntry? entry;
+  final int       rank;
+  final double    platformH;
+  final double Function(_LbEntry) getValue;
+  final String Function(double) formatAmount;
+  final bool      isMe;
 
   const _PodiumSlot({
-    required this.entry, required this.rank,
-    required this.height, required this.sortField,
+    required this.entry,
+    required this.rank,
+    required this.platformH,
+    required this.getValue,
+    required this.formatAmount,
+    required this.isMe,
   });
 
   Color get _rankColor => switch (rank) {
@@ -510,16 +584,10 @@ class _PodiumSlot extends StatelessWidget {
     _ => _C.bronze,
   };
 
-  String get _rankEmoji => switch (rank) {
+  String get _crown => switch (rank) {
     1 => '👑',
     2 => '🥈',
     _ => '🥉',
-  };
-
-  String _valueStr(LeaderboardEntry e) => switch (sortField) {
-    'totalWins'        => '${e.totalWins} W',
-    'totalWithdrawals' => '₹${e.totalWithdrawals.toStringAsFixed(0)}',
-    _                  => '₹${e.totalEarnings.toStringAsFixed(0)}',
   };
 
   @override
@@ -528,42 +596,48 @@ class _PodiumSlot extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         // Crown / medal
-        Text(_rankEmoji, style: const TextStyle(fontSize: 20)),
-        const SizedBox(height: 4),
+        Text(_crown, style: TextStyle(
+          fontSize: rank == 1 ? 28 : 22,
+        )),
+        const SizedBox(height: 6),
 
         // Avatar
         if (entry != null) ...[
           Container(
-            width: 52, height: 52,
+            width: rank == 1 ? 64 : 52,
+            height: rank == 1 ? 64 : 52,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              border: Border.all(color: _rankColor, width: 2.5),
+              border: Border.all(color: _rankColor,
+                  width: rank == 1 ? 3 : 2),
               boxShadow: [BoxShadow(
-                color: _rankColor.withValues(alpha: 0.4), blurRadius: 10,
+                color: _rankColor.withValues(alpha: 0.45),
+                blurRadius: rank == 1 ? 16 : 10,
               )],
             ),
-            child: ClipOval(
-              child: entry!.photoUrl.isNotEmpty
-                  ? Image.network(entry!.photoUrl, fit: BoxFit.cover)
-                  : Container(
-                      color: _C.surfaceElevated,
-                      child: Center(child: Text(
-                        (entry!.name.isNotEmpty ? entry!.name[0] : '?').toUpperCase(),
-                        style: TextStyle(color: _rankColor, fontWeight: FontWeight.w900, fontSize: 20),
-                      )),
-                    ),
-            ),
+            child: ClipOval(child: _Avatar(
+              url: entry!.photoUrl, name: entry!.name,
+              accentColor: _rankColor,
+            )),
           ),
           const SizedBox(height: 6),
-          Text(entry!.ign,
-            style: const TextStyle(
-              color: _C.textPrimary, fontSize: 11, fontWeight: FontWeight.w700,
+          Text(
+            entry!.name,
+            style: TextStyle(
+              color: isMe ? _C.purpleLight : _C.textPrimary,
+              fontSize: rank == 1 ? 12 : 10,
+              fontWeight: FontWeight.w800,
             ),
-            maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center,
+            maxLines: 1, overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 2),
-          Text(_valueStr(entry!),
-            style: TextStyle(color: _rankColor, fontSize: 10, fontWeight: FontWeight.w700),
+          const SizedBox(height: 3),
+          Text(
+            formatAmount(getValue(entry!)),
+            style: TextStyle(
+              color: _rankColor, fontSize: rank == 1 ? 12 : 10,
+              fontWeight: FontWeight.w800,
+            ),
             textAlign: TextAlign.center,
           ),
         ] else ...[
@@ -573,36 +647,47 @@ class _PodiumSlot extends StatelessWidget {
               shape: BoxShape.circle, color: _C.surfaceElevated,
               border: Border.all(color: _C.border),
             ),
-            child: const Center(child: Icon(Icons.person_outline, color: _C.textMuted, size: 24)),
+            child: const Icon(Icons.person_outline,
+                color: _C.textMuted, size: 24),
           ),
           const SizedBox(height: 6),
-          const Text('—', style: TextStyle(color: _C.textMuted, fontSize: 12)),
+          const Text('—', style: TextStyle(
+              color: _C.textMuted, fontSize: 12)),
+          const SizedBox(height: 3),
+          const Text('—', style: TextStyle(
+              color: _C.textMuted, fontSize: 10)),
         ],
-        const SizedBox(height: 6),
 
-        // Platform
+        const SizedBox(height: 8),
+
+        // Platform block
         Container(
-          width: double.infinity, height: height,
+          width: double.infinity,
+          height: platformH,
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter, end: Alignment.bottomCenter,
               colors: [
-                _rankColor.withValues(alpha: 0.2),
-                _rankColor.withValues(alpha: 0.05),
+                _rankColor.withValues(alpha: 0.22),
+                _rankColor.withValues(alpha: 0.06),
               ],
             ),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+            borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(10)),
             border: Border(
-              top:   BorderSide(color: _rankColor.withValues(alpha: 0.5), width: 1),
-              left:  BorderSide(color: _rankColor.withValues(alpha: 0.2), width: 1),
-              right: BorderSide(color: _rankColor.withValues(alpha: 0.2), width: 1),
+              top:   BorderSide(color: _rankColor.withValues(alpha: 0.55), width: 1.5),
+              left:  BorderSide(color: _rankColor.withValues(alpha: 0.2)),
+              right: BorderSide(color: _rankColor.withValues(alpha: 0.2)),
             ),
           ),
-          child: Center(
-            child: Text('#$rank', style: TextStyle(
-              color: _rankColor, fontSize: 22, fontWeight: FontWeight.w900,
-            )),
-          ),
+          child: Center(child: Text(
+            '#$rank',
+            style: TextStyle(
+              color: _rankColor,
+              fontSize: rank == 1 ? 26 : 20,
+              fontWeight: FontWeight.w900,
+            ),
+          )),
         ),
       ],
     );
@@ -610,24 +695,30 @@ class _PodiumSlot extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// LEADERBOARD CARD  (4th place onwards)
+// PLAYER CARD  (rank 4+)
+// Shows ONLY: rank number, avatar, display name, amount
 // ─────────────────────────────────────────────
-class _LeaderboardCard extends StatefulWidget {
-  final LeaderboardEntry entry;
-  final String           sortField;
-  final bool             isMe;
-  final int              delay; // stagger index
+class _PlayerCard extends StatefulWidget {
+  final _LbEntry  entry;
+  final int       rank;
+  final double    value;
+  final String Function(double) formatAmount;
+  final bool      isMe;
+  final int       animDelay;
 
-  const _LeaderboardCard({
-    required this.entry, required this.sortField,
-    required this.isMe,  required this.delay,
+  const _PlayerCard({
+    required this.entry,
+    required this.rank,
+    required this.value,
+    required this.formatAmount,
+    required this.isMe,
+    required this.animDelay,
   });
 
-  @override
-  State<_LeaderboardCard> createState() => _LeaderboardCardState();
+  @override State<_PlayerCard> createState() => _PlayerCardState();
 }
 
-class _LeaderboardCardState extends State<_LeaderboardCard>
+class _PlayerCardState extends State<_PlayerCard>
     with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
   late Animation<double>   _slide;
@@ -636,26 +727,16 @@ class _LeaderboardCardState extends State<_LeaderboardCard>
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 400),
-    );
+    _ctrl = AnimationController(vsync: this,
+        duration: const Duration(milliseconds: 400));
     _slide   = Tween(begin: 30.0, end: 0.0)
         .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
     _opacity = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
-
-    Future.delayed(Duration(milliseconds: 50 + widget.delay * 60), () {
+    Future.delayed(Duration(milliseconds: widget.animDelay), () {
       if (mounted) _ctrl.forward();
     });
   }
-
-  @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
-
-  String _valueStr() => switch (widget.sortField) {
-    'totalWins'        => '${widget.entry.totalWins} Wins',
-    'totalWithdrawals' => '₹${widget.entry.totalWithdrawals.toStringAsFixed(0)}',
-    _                  => '₹${widget.entry.totalEarnings.toStringAsFixed(0)}',
-  };
+  @override void dispose() { _ctrl.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) {
@@ -664,92 +745,81 @@ class _LeaderboardCardState extends State<_LeaderboardCard>
       builder: (_, child) => Opacity(
         opacity: _opacity.value,
         child: Transform.translate(
-          offset: Offset(0, _slide.value),
-          child: child,
-        ),
+          offset: Offset(0, _slide.value), child: child),
       ),
       child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
+        margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
           color: widget.isMe
-              ? _C.purple.withValues(alpha: 0.08)
-              : _C.surfaceCard,
+              ? _C.purple.withValues(alpha: 0.08) : _C.surfaceCard,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: widget.isMe ? _C.purple.withValues(alpha: 0.4) : _C.border,
+            color: widget.isMe
+                ? _C.purple.withValues(alpha: 0.4) : _C.border,
             width: widget.isMe ? 1.5 : 1,
           ),
         ),
         child: Row(children: [
-          // Rank number
+          // Rank
           SizedBox(
-            width: 32,
-            child: Text('#${widget.entry.rank}',
-              style: TextStyle(
-                color: _C.textMuted, fontSize: 13, fontWeight: FontWeight.w700,
-              ),
-              textAlign: TextAlign.center,
-            ),
+            width: 36,
+            child: Text('#${widget.rank}', textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: _C.textMuted, fontSize: 13,
+                fontWeight: FontWeight.w700,
+              )),
           ),
           const SizedBox(width: 10),
 
           // Avatar
-          Container(
-            width: 40, height: 40,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: widget.isMe ? _C.purple : _C.border, width: 1.5,
+          SizedBox(
+            width: 42, height: 42,
+            child: ClipOval(child: Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: widget.isMe ? _C.purple : _C.border, width: 1.5),
               ),
-            ),
-            child: ClipOval(
-              child: widget.entry.photoUrl.isNotEmpty
-                  ? Image.network(widget.entry.photoUrl, fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => _AvatarFallback(name: widget.entry.name))
-                  : _AvatarFallback(name: widget.entry.name),
-            ),
+              child: _Avatar(
+                url: widget.entry.photoUrl, name: widget.entry.name,
+                accentColor: widget.isMe ? _C.purple : _C.textMuted,
+              ),
+            )),
           ),
           const SizedBox(width: 12),
 
-          // Name + IGN
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              Flexible(child: Text(widget.entry.name,
-                style: const TextStyle(
-                  color: _C.textPrimary, fontSize: 13, fontWeight: FontWeight.w700,
-                ),
-                overflow: TextOverflow.ellipsis,
-              )),
-              if (widget.isMe) ...[
-                const SizedBox(width: 6),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: _C.purpleGlowFaint,
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: _C.purple.withValues(alpha: 0.4)),
-                  ),
-                  child: const Text('YOU', style: TextStyle(
-                    color: _C.purpleLight, fontSize: 8, fontWeight: FontWeight.w800,
-                  )),
-                ),
-              ],
-            ]),
-            Text(widget.entry.ign,
+          // Name only
+          Expanded(child: Row(children: [
+            Flexible(child: Text(widget.entry.name,
               style: const TextStyle(
-                color: _C.textMuted, fontSize: 11, fontWeight: FontWeight.w500,
+                color: _C.textPrimary, fontSize: 14,
+                fontWeight: FontWeight.w700,
               ),
               overflow: TextOverflow.ellipsis,
-            ),
+            )),
+            if (widget.isMe) ...[
+              const SizedBox(width: 7),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                  color: _C.purpleGlowFaint,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: _C.purple.withValues(alpha: 0.4)),
+                ),
+                child: const Text('YOU', style: TextStyle(
+                  color: _C.purpleLight, fontSize: 8,
+                  fontWeight: FontWeight.w800,
+                )),
+              ),
+            ],
           ])),
 
-          // Value
-          Text(_valueStr(),
-            style: const TextStyle(
-              color: _C.gold, fontSize: 13, fontWeight: FontWeight.w800,
-            ),
-          ),
+          // Amount
+          Text(widget.formatAmount(widget.value), style: const TextStyle(
+            color: _C.gold, fontSize: 14,
+            fontWeight: FontWeight.w800,
+          )),
         ]),
       ),
     );
@@ -757,97 +827,169 @@ class _LeaderboardCardState extends State<_LeaderboardCard>
 }
 
 // ─────────────────────────────────────────────
-// UTILITY WIDGETS
+// AVATAR WIDGET
 // ─────────────────────────────────────────────
-class _AvatarFallback extends StatelessWidget {
+class _Avatar extends StatelessWidget {
+  final String url;
   final String name;
-  const _AvatarFallback({required this.name});
+  final Color  accentColor;
+  const _Avatar({required this.url, required this.name, required this.accentColor});
 
+  @override
+  Widget build(BuildContext context) {
+    if (url.isNotEmpty) {
+      return Image.network(
+        url, fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => _Fallback(name: name, color: accentColor),
+      );
+    }
+    return _Fallback(name: name, color: accentColor);
+  }
+}
+
+class _Fallback extends StatelessWidget {
+  final String name;
+  final Color  color;
+  const _Fallback({required this.name, required this.color});
   @override
   Widget build(BuildContext context) {
     return Container(
       color: _C.surfaceElevated,
       child: Center(child: Text(
         name.isNotEmpty ? name[0].toUpperCase() : '?',
-        style: const TextStyle(
-          color: _C.purple, fontWeight: FontWeight.w900, fontSize: 16,
+        style: TextStyle(
+          color: color, fontWeight: FontWeight.w900, fontSize: 18,
         ),
       )),
     );
   }
 }
 
-class _LoadingIndicator extends StatelessWidget {
-  const _LoadingIndicator();
+// ─────────────────────────────────────────────
+// PAINTER — floating particles behind podium
+// ─────────────────────────────────────────────
+class _PodiumParticlePainter extends CustomPainter {
+  final double progress;
+  static final _rng = math.Random(99);
+  static final _pts = List.generate(16, (i) => [
+    _rng.nextDouble(), _rng.nextDouble(),
+    _rng.nextDouble() * 2.5 + 1,
+    _rng.nextDouble(),
+  ]);
+
+  const _PodiumParticlePainter(this.progress);
 
   @override
+  void paint(Canvas canvas, Size size) {
+    for (final p in _pts) {
+      final t     = (progress + p[3]) % 1.0;
+      final x     = p[0] * size.width;
+      final y     = (p[1] - t * 0.35) % 1.0 * size.height;
+      final r     = p[2];
+      final alpha = (math.sin(t * math.pi) * 0.3).clamp(0.0, 0.3);
+      canvas.drawCircle(
+        Offset(x, y), r,
+        Paint()
+          ..color = _C.gold.withValues(alpha: alpha)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _PodiumParticlePainter old) =>
+      old.progress != progress;
+}
+
+// ─────────────────────────────────────────────
+// STATE WIDGETS
+// ─────────────────────────────────────────────
+class _LoadingState extends StatelessWidget {
+  const _LoadingState();
+  @override
   Widget build(BuildContext context) {
-    return Column(mainAxisSize: MainAxisSize.min, children: const [
-      SizedBox(
-        width: 36, height: 36,
-        child: CircularProgressIndicator(
-          color: _C.purple, strokeWidth: 2,
-        ),
-      ),
-      SizedBox(height: 12),
-      Text('Loading leaderboard…',
-        style: TextStyle(color: _C.textMuted, fontSize: 12)),
-    ]);
+    return const Center(child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(width: 36, height: 36,
+          child: CircularProgressIndicator(
+              color: _C.purple, strokeWidth: 2)),
+        SizedBox(height: 12),
+        Text('Loading leaderboard…', style: TextStyle(
+            color: _C.textMuted, fontSize: 12)),
+      ],
+    ));
   }
 }
 
 class _ErrorState extends StatelessWidget {
   final String message;
   const _ErrorState({required this.message});
-
   @override
   Widget build(BuildContext context) {
     return Center(child: Padding(
       padding: const EdgeInsets.all(24),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.error_outline_rounded, color: Color(0xFFFF4466), size: 40),
+        const Icon(Icons.error_outline_rounded,
+            color: _C.live, size: 40),
         const SizedBox(height: 12),
-        Text(message, style: const TextStyle(color: _C.textSecondary, fontSize: 13),
-          textAlign: TextAlign.center),
+        Text(message, style: const TextStyle(
+          color: _C.textSecondary, fontSize: 13), textAlign: TextAlign.center),
       ]),
     ));
   }
 }
 
 class _EmptyState extends StatelessWidget {
-  final String message;
-  const _EmptyState({required this.message});
-
+  const _EmptyState();
   @override
   Widget build(BuildContext context) {
     return Center(child: Padding(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(40),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Text('🏆', style: TextStyle(fontSize: 48)),
-        const SizedBox(height: 12),
-        Text(message,
-          style: const TextStyle(color: _C.textSecondary, fontSize: 13, height: 1.5),
+        Container(
+          width: 72, height: 72,
+          decoration: BoxDecoration(
+            color: _C.purpleGlowFaint, shape: BoxShape.circle,
+            border: Border.all(color: _C.border),
+          ),
+          child: const Center(child: Text('🏆',
+              style: TextStyle(fontSize: 32))),
+        ),
+        const SizedBox(height: 16),
+        const Text('No data yet for this week.',
+          style: TextStyle(color: _C.textPrimary,
+              fontSize: 15, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 6),
+        const Text('Be the first to compete and claim the top spot!',
+          style: TextStyle(color: _C.textSecondary, fontSize: 12, height: 1.5),
           textAlign: TextAlign.center),
       ]),
     ));
   }
 }
 
-// ════════════════════════════════════════════
-// FIRESTORE COLLECTION STRUCTURE (docs only)
-// ════════════════════════════════════════════
+// ─────────────────────────────────────────────
+// FIRESTORE INDEXES REQUIRED
+// ─────────────────────────────────────────────
+// Collection: users
+//   Fields: totalEarnings DESC    (for Winnings leaderboard)
+//   Fields: totalWithdrawals DESC (for Withdrawals leaderboard)
 //
-//  weekly_leaderboard/
-//    {weekId}/               ← e.g. "2025-W23"
-//      entries/
-//        {uid}/
-//          uid:              String
-//          name:             String
-//          ign:              String  ← In-Game Name
-//          photoUrl:         String
-//          totalEarnings:    Number  (updated by Cloud Function on winnings)
-//          totalWins:        Number  (updated by Cloud Function on tournament end)
-//          totalWithdrawals: Number  (updated by Cloud Function on approved withdrawal)
-//
-// Recommended: Cloud Function triggers on wallet_transactions writes
-// to aggregate into weekly_leaderboard/{weekId}/entries/{uid}
+// Create via Firebase Console → Firestore → Indexes → Single Field
+// or paste into firestore.indexes.json:
+// {
+//   "indexes": [],
+//   "fieldOverrides": [
+//     {
+//       "collectionGroup": "users",
+//       "fieldPath": "totalEarnings",
+//       "indexes": [{ "order": "DESCENDING", "queryScope": "COLLECTION" }]
+//     },
+//     {
+//       "collectionGroup": "users",
+//       "fieldPath": "totalWithdrawals",
+//       "indexes": [{ "order": "DESCENDING", "queryScope": "COLLECTION" }]
+//     }
+//   ]
+// }
