@@ -78,10 +78,18 @@ class AuthService {
         'name': user.displayName ?? 'Player',
         'email': user.email ?? '',
         'photoUrl': user.photoURL ?? '',
+      
         'walletBalance': 0,
+        'totalEarnings': 0,
+        'totalDeposits': 0,
+        'totalWithdrawals': 0,
+      
         'wins': 0,
         'tournamentsPlayed': 0,
-        'rankPoints': 0,
+      
+        'ign': '',
+        'gameUid': '',
+        'gameLevel': 0,
       });
     }
   }
