@@ -1,6 +1,32 @@
 // lib/services/wallet_service.dart
+// ─────────────────────────────────────────────
+// WALLET SERVICE  — Shadow Storm (v3)
+//
+// ✅ Discord webhook on deposit + withdrawal (rich embeds, esports styled)
+// ✅ AppSecrets for centralized webhook URLs
+// ✅ Balance guard: frontend + backend validation for withdrawals
+// ✅ UPI deep link generation
+// ✅ No auto-approval, no direct walletBalance writes
+// ✅ Firestore paths:
+//      users/{uid}/deposit_requests/
+//      users/{uid}/withdraw_requests/
+//      users/{uid}/transactions/
+// ─────────────────────────────────────────────
+
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:http/http.dart' as http;
+import '../config/app_secrets.dart';
+
+// ─────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────
+
+const _kUpiId       = 'shadowstormpay@ibl';
+const _kPayeeName   = 'Himanshu Kashyap';
+const _kMinDeposit  = 50.0;
+const _kMinWithdraw = 50.0;
 
 // ─────────────────────────────────────────────
 // DATA MODELS
@@ -37,7 +63,7 @@ class DepositRequest {
   final String   id;
   final double   amount;
   final String   utr;
-  final String   status;    // pending | approved | rejected
+  final String   status;     // pending | approved | rejected
   final String?  adminNote;
   final DateTime createdAt;
 
@@ -54,10 +80,10 @@ class DepositRequest {
     final d = doc.data() as Map<String, dynamic>;
     return DepositRequest(
       id:        doc.id,
-      amount:    (d['amount']  ?? 0).toDouble(),
-      utr:       d['utr']      as String? ?? '',
-      status:    d['status']   as String? ?? 'pending',
-      adminNote: d['adminNote'] as String?,
+      amount:    (d['amount']    ?? 0).toDouble(),
+      utr:       d['utr']        as String? ?? '',
+      status:    d['status']     as String? ?? 'pending',
+      adminNote: d['adminNote']  as String?,
       createdAt: (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );
   }
@@ -133,19 +159,37 @@ class WalletTransaction {
     final d = doc.data() as Map<String, dynamic>;
     return WalletTransaction(
       id:           doc.id,
-      amount:       (d['amount']   ?? 0).toDouble(),
-      type:         d['type']      as String? ?? 'deposit',
-      status:       d['status']    as String? ?? 'pending',
+      amount:       (d['amount']     ?? 0).toDouble(),
+      type:         d['type']        as String? ?? 'deposit',
+      status:       d['status']      as String? ?? 'pending',
       description:  d['description'] as String?,
       tournamentId: d['tournamentId'] as String?,
-      createdAt:    (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      createdAt:    (d['createdAt']  as Timestamp?)?.toDate() ?? DateTime.now(),
     );
   }
 
-  /// Credits: deposit, winnings, refund → money coming IN.
   bool get isCredit =>
       type == 'deposit' || type == 'winnings' || type == 'refund';
 }
+
+// ─────────────────────────────────────────────
+// UPI UTILITIES
+// ─────────────────────────────────────────────
+
+/// Generates a UPI deep-link URL for the given [amount].
+/// Format: upi://pay?pa=<upiId>&pn=<payeeName>&am=<amount>&cu=INR&tn=<note>
+String buildUpiDeepLink(double amount) {
+  final encoded = Uri.encodeComponent(_kPayeeName);
+  return 'upi://pay'
+      '?pa=$_kUpiId'
+      '&pn=$encoded'
+      '&am=${amount.toStringAsFixed(2)}'
+      '&cu=INR'
+      '&tn=Shadow+Storm+Deposit';
+}
+
+/// Returns the UPI ID used as the payment target.
+String get upiId => _kUpiId;
 
 // ─────────────────────────────────────────────
 // WALLET SERVICE
@@ -174,7 +218,6 @@ class WalletService {
   // WALLET SUMMARY STREAM
   // ──────────────────────────────────────────
 
-  /// Realtime stream of [WalletData] from users/{uid}.
   Stream<WalletData> walletDataStream() {
     final uid = _uid;
     if (uid == null) return Stream.value(WalletData.empty);
@@ -185,22 +228,45 @@ class WalletService {
   }
 
   // ──────────────────────────────────────────
+  // CURRENT BALANCE (one-time read for validation)
+  // ──────────────────────────────────────────
+
+  Future<double> getCurrentBalance() async {
+    final uid = _uid;
+    if (uid == null) return 0.0;
+    final snap = await _db.collection('users').doc(uid).get();
+    return (snap.data()?['walletBalance'] ?? 0).toDouble();
+  }
+
+  // ──────────────────────────────────────────
   // DEPOSIT REQUESTS
   // Path: users/{uid}/deposit_requests/{id}
   // ──────────────────────────────────────────
 
+  /// Submits a deposit request and fires Discord webhook.
   Future<void> submitDepositRequest({
     required double amount,
     required String utr,
   }) async {
-    final uid = _uid;
-    if (uid == null) throw Exception('Not logged in.');
+    final uid  = _uid;
+    final user = _auth.currentUser;
+    if (uid == null || user == null) throw Exception('Not logged in.');
+
+    // ── Validation ──
+    if (amount < _kMinDeposit) {
+      throw Exception('Minimum deposit is ₹${_kMinDeposit.toStringAsFixed(0)}.');
+    }
+
+    final utrTrimmed = utr.trim();
+    if (utrTrimmed.isEmpty || utrTrimmed.length < 6) {
+      throw Exception('Invalid UTR number. Please check and try again.');
+    }
 
     final col = _depositCol(uid);
 
-    // Reject duplicate UTR within this user's deposit history
+    // Reject duplicate UTR
     final dup = await col
-        .where('utr', isEqualTo: utr.trim())
+        .where('utr', isEqualTo: utrTrimmed)
         .limit(1)
         .get();
     if (dup.docs.isNotEmpty) {
@@ -209,12 +275,24 @@ class WalletService {
           'Contact support on Discord or Telegram if this is a mistake.');
     }
 
-    await col.add({
+    // ── Write to Firestore ──
+    final now = DateTime.now();
+    final ref = await col.add({
       'amount':    amount,
-      'utr':       utr.trim(),
+      'utr':       utrTrimmed,
       'status':    'pending',
       'createdAt': FieldValue.serverTimestamp(),
     });
+
+    // ── Discord Webhook ──
+    await _sendDepositWebhook(
+      requestId:   ref.id,
+      playerName:  user.displayName ?? 'Unknown',
+      uid:         uid,
+      amount:      amount,
+      utr:         utrTrimmed,
+      createdAt:   now,
+    );
   }
 
   /// Realtime stream of this user's deposit requests, newest-first.
@@ -232,6 +310,8 @@ class WalletService {
   // Path: users/{uid}/withdraw_requests/{id}
   // ──────────────────────────────────────────
 
+  /// Submits a withdrawal request and fires Discord webhook.
+  /// Validates balance server-side (frontend should validate too).
   Future<void> submitWithdrawRequest({
     required double amount,
     required String method,
@@ -241,15 +321,27 @@ class WalletService {
     required String accountNumber,
     required String ifscCode,
   }) async {
-    final uid = _uid;
-    if (uid == null) throw Exception('Not logged in.');
+    final uid  = _uid;
+    final user = _auth.currentUser;
+    if (uid == null || user == null) throw Exception('Not logged in.');
 
-    // Read-only balance guard (admin enforces server-side too)
-    final snap = await _db.collection('users').doc(uid).get();
+    // ── Amount validation ──
+    if (amount < _kMinWithdraw) {
+      throw Exception('Minimum withdrawal is ₹${_kMinWithdraw.toStringAsFixed(0)}.');
+    }
+    if (amount <= 0) {
+      throw Exception('Invalid withdrawal amount.');
+    }
+
+    // ── Balance guard (server-side read) ──
+    final snap    = await _db.collection('users').doc(uid).get();
     final balance = (snap.data()?['walletBalance'] ?? 0).toDouble();
+
     if (amount > balance) {
       throw Exception(
-          'Insufficient balance. Available: ₹${balance.toStringAsFixed(2)}');
+          'Insufficient wallet balance. '
+          'Available: ₹${balance.toStringAsFixed(2)}. '
+          'Requested: ₹${amount.toStringAsFixed(2)}.');
     }
 
     final col = _withdrawCol(uid);
@@ -261,11 +353,13 @@ class WalletService {
         .get();
     if (pending.docs.isNotEmpty) {
       throw Exception(
-          'You already have a pending withdrawal. '
+          'You already have a pending withdrawal request. '
           'Wait for it to be processed before submitting a new one.');
     }
 
-    await col.add({
+    // ── Write to Firestore ──
+    final now = DateTime.now();
+    final ref = await col.add({
       'amount':        amount,
       'method':        method,
       'upiId':         upiId.trim(),
@@ -276,6 +370,18 @@ class WalletService {
       'status':        'pending',
       'createdAt':     FieldValue.serverTimestamp(),
     });
+
+    // ── Discord Webhook ──
+    await _sendWithdrawWebhook(
+      requestId:      ref.id,
+      playerName:     user.displayName ?? 'Unknown',
+      uid:            uid,
+      amount:         amount,
+      upiId:          upiId.trim(),
+      accountHolder:  accountHolder.trim(),
+      method:         method,
+      createdAt:      now,
+    );
   }
 
   /// Realtime stream of this user's withdrawal requests, newest-first.
@@ -293,7 +399,6 @@ class WalletService {
   // Path: users/{uid}/transactions/{id}
   // ──────────────────────────────────────────
 
-  /// Realtime stream of this user's transactions, newest-first.
   Stream<List<WalletTransaction>> transactionsStream() {
     final uid = _uid;
     if (uid == null) return Stream.value([]);
@@ -301,6 +406,119 @@ class WalletService {
         .orderBy('createdAt', descending: true)
         .snapshots()
         .map((s) => s.docs.map(WalletTransaction.fromDoc).toList());
+  }
+
+  // ──────────────────────────────────────────
+  // DISCORD WEBHOOKS (Rich Embeds)
+  // ──────────────────────────────────────────
+
+  /// Sends a rich Discord embed for a new deposit request.
+  Future<void> _sendDepositWebhook({
+    required String   requestId,
+    required String   playerName,
+    required String   uid,
+    required double   amount,
+    required String   utr,
+    required DateTime createdAt,
+  }) async {
+    final url = AppSecrets.depositWebhook;
+    if (url.isEmpty) return; // Webhook not configured
+
+    final isoTime = createdAt.toUtc().toIso8601String();
+
+    final body = jsonEncode({
+      'embeds': [
+        {
+          'title': '💰 NEW DEPOSIT REQUEST',
+          'description':
+              '> A new deposit request has been submitted and is awaiting admin approval.',
+          'color': 0x44FF99, // Green
+          'fields': [
+            {'name': '👤 Player Name', 'value': playerName,    'inline': true},
+            {'name': '🆔 UID',         'value': '`$uid`',      'inline': true},
+            {'name': '\u200B',         'value': '\u200B',       'inline': false},
+            {'name': '💵 Amount',      'value': '**₹${amount.toStringAsFixed(2)}**', 'inline': true},
+            {'name': '🔢 UTR',         'value': '`$utr`',       'inline': true},
+            {'name': '\u200B',         'value': '\u200B',       'inline': false},
+            {'name': '🗂️ Request ID',  'value': '`$requestId`', 'inline': true},
+            {'name': '📌 Status',      'value': '🟡 **PENDING**','inline': true},
+          ],
+          'footer': {
+            'text': 'Shadow Storm Wallet System  •  Deposit Request',
+          },
+          'timestamp': isoTime,
+        }
+      ],
+    });
+
+    try {
+      await http.post(
+        Uri.parse(url),
+        headers: {'Content-Type': 'application/json'},
+        body: body,
+      );
+    } catch (_) {
+      // Webhook failures must NOT block the user flow.
+      // Silently ignore; admin will still see the Firestore entry.
+    }
+  }
+
+  /// Sends a rich Discord embed for a new withdrawal request.
+  Future<void> _sendWithdrawWebhook({
+    required String   requestId,
+    required String   playerName,
+    required String   uid,
+    required double   amount,
+    required String   upiId,
+    required String   accountHolder,
+    required String   method,
+    required DateTime createdAt,
+  }) async {
+    final url = AppSecrets.withdrawWebhook;
+    if (url.isEmpty) return;
+
+    final isoTime    = createdAt.toUtc().toIso8601String();
+    final methodLabel = method == 'upi' ? '📱 UPI' : '🏦 Bank Transfer';
+    final destValue   = method == 'upi'
+        ? '`$upiId`'
+        : '`$accountHolder`';
+
+    final body = jsonEncode({
+      'embeds': [
+        {
+          'title': '📤 NEW WITHDRAWAL REQUEST',
+          'description':
+              '> A new withdrawal request is awaiting admin approval and payout.',
+          'color': 0xFF4466, // Red
+          'fields': [
+            {'name': '👤 Player Name',    'value': playerName,   'inline': true},
+            {'name': '🆔 UID',            'value': '`$uid`',     'inline': true},
+            {'name': '\u200B',            'value': '\u200B',      'inline': false},
+            {'name': '💸 Amount',         'value': '**₹${amount.toStringAsFixed(2)}**', 'inline': true},
+            {'name': '💳 Method',         'value': methodLabel,  'inline': true},
+            {'name': '\u200B',            'value': '\u200B',      'inline': false},
+            {'name': '🏦 Destination',    'value': destValue,    'inline': true},
+            {'name': '📌 Status',         'value': '🟡 **PENDING**', 'inline': true},
+            {'name': '\u200B',            'value': '\u200B',      'inline': false},
+            {'name': '🗂️ Request ID',     'value': '`$requestId`','inline': true},
+          ],
+          'footer': {
+            'text': 'Shadow Storm Wallet System  •  Withdrawal Request',
+          },
+          'timestamp': isoTime,
+        }
+      ],
+    });
+
+    try {
+      await http.post(
+        Uri.parse(url),
+        headers: {'Content-Type': 'application/json'},
+        body: body,
+      );
+    } catch (_) {
+      // Silently ignore webhook failures.
+    }
   }
 }
 
@@ -313,7 +531,7 @@ class WalletService {
 //   name             : string
 //   email            : string
 //   photoUrl         : string
-//   walletBalance    : number   ← BACKEND ONLY
+//   walletBalance    : number   ← BACKEND ONLY (never write from frontend)
 //   totalEarnings    : number   ← BACKEND ONLY
 //   totalDeposits    : number   ← BACKEND ONLY
 //   totalWithdrawals : number   ← BACKEND ONLY
@@ -346,20 +564,3 @@ class WalletService {
 //         description  : string (optional)
 //         tournamentId : string (optional)
 //         createdAt    : timestamp
-//
-// ─────────────────────────────────────────────
-// REQUIRED FIRESTORE INDEXES
-// ─────────────────────────────────────────────
-// All subcollection queries are on a single field with orderBy createdAt DESC.
-// Firestore auto-indexes single-field queries, so NO composite indexes needed
-// for subcollections. The only indexes you may need:
-//
-// users/{uid}/deposit_requests — orderBy: createdAt DESC  (auto-indexed)
-// users/{uid}/withdraw_requests — orderBy: createdAt DESC (auto-indexed)
-// users/{uid}/transactions — orderBy: createdAt DESC      (auto-indexed)
-//
-// For leaderboard (ranks_screen):
-// Collection: users
-//   Fields: totalEarnings DESC    (for winnings leaderboard)
-//   Fields: totalWithdrawals DESC (for withdrawals leaderboard)
-// ─────────────────────────────────────────────

@@ -1,26 +1,28 @@
 // lib/screens/wallet_screen.dart
 // ─────────────────────────────────────────────
-// WALLET SCREEN  — Shadow Storm  (v2)
+// WALLET SCREEN  — Shadow Storm  (v3)
 //
-// Layout: Scaffold → Column → [fixed header, fixed balance hero,
-//         fixed quick-action grid, Expanded → IndexedStack]
-//
-// ✅ NO NestedScrollView + SliverPersistentHeader (crash-safe)
-// ✅ Firestore paths: users/{uid}/transactions/
-//                    users/{uid}/deposit_requests/
-//                    users/{uid}/withdraw_requests/
-// ✅ Premium animated balance card with particles + shimmer
-// ✅ Quick-action navigation: Deposit | Withdraw | History | Support
-// ✅ No Firebase Storage / image_picker
+// ✅ UPI deep link + QR code (qr_flutter)
+// ✅ Real-time balance validation for withdrawal
+// ✅ Glowing insufficient-balance warning card
+// ✅ Approval time notice (8PM–8AM daily)
+// ✅ Discord webhook (via WalletService)
+// ✅ No floating bubbles / unnecessary background animations
+// ✅ Firestore paths:
+//      users/{uid}/deposit_requests/
+//      users/{uid}/withdraw_requests/
+//      users/{uid}/transactions/
+// ✅ No Firebase Storage / image_picker / payment gateway SDKs
 // ─────────────────────────────────────────────
 
-import 'dart:math' as math;
+// import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/wallet_service.dart';
 
-// ── Design tokens (mirror SSColors from home_screen.dart) ──────────────────
+// ── Design tokens ──────────────────────────────────────────────────────────
 class _C {
   static const background      = Color(0xFF06040E);
   static const surface         = Color(0xFF0E0A1A);
@@ -29,8 +31,6 @@ class _C {
 
   static const purple          = Color(0xFF9D55FF);
   static const purpleLight     = Color(0xFFB07EF8);
-  // static const purpleDim       = Color(0xFF7B3FE4);
-  // static const purpleDark      = Color(0xFF3C2570);
   static const purpleGlow      = Color(0x559D55FF);
   static const purpleGlowFaint = Color(0x229D55FF);
 
@@ -41,6 +41,7 @@ class _C {
   static const gold            = Color(0xFFFFCC44);
   static const goldGlow        = Color(0x55FFCC44);
   static const live            = Color(0xFFFF4466);
+  static const liveGlow        = Color(0x55FF4466);
   static const success         = Color(0xFF44FF99);
   static const discord         = Color(0xFF5865F2);
   static const telegram        = Color(0xFF229ED9);
@@ -102,13 +103,10 @@ class _WalletScreenState extends State<WalletScreen>
 
   int _sectionIndex = 0; // 0=Deposit 1=Withdraw 2=History 3=Support
 
-  // Animations
   late AnimationController _fadeCtrl;
   late AnimationController _pulseCtrl;
-  late AnimationController _particleCtrl;
   late Animation<double>   _fadeIn;
   late Animation<double>   _pulse;
-  late Animation<double>   _particleAnim;
 
   @override
   void initState() {
@@ -119,26 +117,17 @@ class _WalletScreenState extends State<WalletScreen>
     _pulseCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 2200))
       ..repeat(reverse: true);
-    _particleCtrl = AnimationController(
-        vsync: this, duration: const Duration(seconds: 6))
-      ..repeat();
-
-    _fadeIn       = CurvedAnimation(parent: _fadeCtrl,    curve: Curves.easeOutCubic);
-    _pulse        = CurvedAnimation(parent: _pulseCtrl,   curve: Curves.easeInOut);
-    _particleAnim = CurvedAnimation(parent: _particleCtrl, curve: Curves.linear);
+    _fadeIn = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOutCubic);
+    _pulse  = CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut);
   }
 
   @override
   void dispose() {
     _fadeCtrl.dispose();
     _pulseCtrl.dispose();
-    _particleCtrl.dispose();
     super.dispose();
   }
 
-  // ─────────────────────────────────────────
-  // BUILD
-  // ─────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final topPad = MediaQuery.of(context).padding.top;
@@ -151,6 +140,7 @@ class _WalletScreenState extends State<WalletScreen>
             SizedBox(height: topPad),
             _buildAppBar(),
             _buildBalanceHero(),
+            _buildApprovalNotice(),
             _buildQuickActions(),
             const SizedBox(height: 4),
             Expanded(
@@ -204,7 +194,6 @@ class _WalletScreenState extends State<WalletScreen>
             size: 17, weight: FontWeight.w900,
             letterSpacing: 2, color: _C.textPrimary)),
         const Spacer(),
-        // Live indicator
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
@@ -221,6 +210,46 @@ class _WalletScreenState extends State<WalletScreen>
           ]),
         ),
       ]),
+    );
+  }
+
+  // ── APPROVAL TIME NOTICE ──────────────────
+  Widget _buildApprovalNotice() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              _C.gold.withValues(alpha: 0.10),
+              _C.purple.withValues(alpha: 0.07),
+            ],
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+          ),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _C.gold.withValues(alpha: 0.35)),
+        ),
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: _C.gold.withValues(alpha: 0.15),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.schedule_rounded,
+                color: _C.gold, size: 14),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Deposit & withdrawal approvals are processed daily between 8 PM and 8 AM.',
+              style: _ts(size: 11, color: _C.textSecondary, height: 1.4),
+            ),
+          ),
+        ]),
+      ),
     );
   }
 
@@ -244,10 +273,6 @@ class _WalletScreenState extends State<WalletScreen>
                         alpha: 0.18 + 0.10 * _pulse.value),
                     blurRadius: 28 + 8 * _pulse.value,
                   ),
-                  BoxShadow(
-                    color: _C.gold.withValues(alpha: 0.06 + 0.04 * _pulse.value),
-                    blurRadius: 40,
-                  ),
                 ],
               ),
               child: child,
@@ -266,20 +291,6 @@ class _WalletScreenState extends State<WalletScreen>
                     ),
                   ),
                 ),
-                // Particle layer
-                SizedBox(
-                  height: 140,
-                  child: AnimatedBuilder(
-                    animation: _particleAnim,
-                    builder: (_, _) => CustomPaint(
-                      painter: _ParticlePainter(progress: _particleAnim.value),
-                      size: Size(
-                        MediaQuery.of(ctx).size.width - 32,
-                        140,
-                      ),
-                    ),
-                  ),
-                ),
                 // Holographic shimmer lines
                 Positioned.fill(child: CustomPaint(
                   painter: _HoloPainter(),
@@ -295,7 +306,6 @@ class _WalletScreenState extends State<WalletScreen>
                 Padding(
                   padding: const EdgeInsets.all(20),
                   child: Column(children: [
-                    // Balance
                     Row(children: [
                       const Icon(Icons.account_balance_wallet_rounded,
                           color: _C.purple, size: 16),
@@ -310,17 +320,14 @@ class _WalletScreenState extends State<WalletScreen>
                         : Text(
                             '₹${d.balance.toStringAsFixed(2)}',
                             style: _ts(
-                              size: 38,
-                              weight: FontWeight.w900,
-                              color: _C.gold,
-                              letterSpacing: 0.5,
+                              size: 38, weight: FontWeight.w900,
+                              color: _C.gold, letterSpacing: 0.5,
                             ),
                           ),
                     const SizedBox(height: 4),
-                    Text('Available Balance', style: _ts(
-                        size: 11, color: _C.textMuted)),
+                    Text('Available Balance',
+                        style: _ts(size: 11, color: _C.textMuted)),
                     const SizedBox(height: 14),
-                    // 3 stat chips
                     Row(children: [
                       Expanded(child: _BalanceStat(
                         label: 'WINNINGS',
@@ -355,10 +362,10 @@ class _WalletScreenState extends State<WalletScreen>
 
   // ── QUICK ACTIONS ─────────────────────────
   static const _actions = [
-    (Icons.add_rounded,              'Deposit',  _C.success),
-    (Icons.remove_rounded,           'Withdraw', _C.live),
-    (Icons.receipt_long_rounded,     'History',  _C.purple),
-    (Icons.support_agent_rounded,    'Support',  _C.discord),
+    (Icons.add_rounded,           'Deposit',  _C.success),
+    (Icons.remove_rounded,        'Withdraw', _C.live),
+    (Icons.receipt_long_rounded,  'History',  _C.purple),
+    (Icons.support_agent_rounded, 'Support',  _C.discord),
   ];
 
   Widget _buildQuickActions() {
@@ -427,17 +434,63 @@ class _DepositSectionState extends State<_DepositSection> {
   final _formKey    = GlobalKey<FormState>();
   final _amountCtrl = TextEditingController();
   final _utrCtrl    = TextEditingController();
-  bool    _loading = false;
+  bool    _loading    = false;
   String? _error;
-  bool    _success = false;
+  bool    _success    = false;
+  bool    _paymentDone = false; // step tracker: show UTR field after UPI tap
+  String  _upiLink     = '';
 
   final _quick = [100, 250, 500, 1000, 2500, 5000];
+
+  @override
+  void initState() {
+    super.initState();
+    _amountCtrl.addListener(_onAmountChanged);
+  }
+
+  void _onAmountChanged() {
+    final amount = double.tryParse(_amountCtrl.text.trim());
+    setState(() {
+      _upiLink = (amount != null && amount >= 50)
+          ? buildUpiDeepLink(amount)
+          : '';
+    });
+  }
 
   @override
   void dispose() {
     _amountCtrl.dispose();
     _utrCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _launchUpi() async {
+    if (_upiLink.isEmpty) return;
+    final uri = Uri.parse(_upiLink);
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No UPI app found. Please install GPay, PhonePe or Paytm.'),
+          backgroundColor: _C.live,
+        ),
+      );
+    } else {
+      setState(() => _paymentDone = true);
+    }
+  }
+
+  Future<void> _launch(String url) async {
+    final uri = Uri.parse(url);
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Could not open: $url'),
+              backgroundColor: _C.live),
+        );
+      }
+    }
   }
 
   Future<void> _submit() async {
@@ -448,45 +501,44 @@ class _DepositSectionState extends State<_DepositSection> {
         amount: double.parse(_amountCtrl.text.trim()),
         utr:    _utrCtrl.text.trim(),
       );
-      setState(() { _success = true; _loading = false; });
+      setState(() {
+        _success      = true;
+        _loading      = false;
+        _paymentDone  = false;
+      });
       _amountCtrl.clear();
       _utrCtrl.clear();
     } catch (e) {
-      setState(() { _error = e.toString().replaceFirst('Exception: ', ''); _loading = false; });
-    }
-  }
-
-  Future<void> _launch(String url) async {
-    final uri = Uri.parse(url);
-    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open: $url'), backgroundColor: _C.live),
-      );
-      }
+      setState(() {
+        _error   = e.toString().replaceFirst('Exception: ', '');
+        _loading = false;
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final amount   = double.tryParse(_amountCtrl.text.trim());
+    final hasAmount = amount != null && amount >= 50;
+
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
       child: Form(
         key: _formKey,
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _InfoBanner(
-            icon: Icons.info_outline_rounded, color: _C.purple,
-            text: 'Enter amount + UTR, then send your payment screenshot '
-                'to Discord or Telegram for approval (usually within 30 min).',
-          ),
-          const SizedBox(height: 18),
 
-          _FieldLabel('AMOUNT  (₹)'),
+          // ── Step 1: Amount ─────────────────
+          _StepBadge(number: '1', label: 'ENTER DEPOSIT AMOUNT'),
+          const SizedBox(height: 10),
           _StyledField(
-            controller: _amountCtrl, hint: 'Enter deposit amount',
-            keyboardType: TextInputType.number, prefixText: '₹ ',
-            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))],
+            controller: _amountCtrl,
+            hint: 'Enter deposit amount',
+            keyboardType: TextInputType.number,
+            prefixText: '₹ ',
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))
+            ],
             validator: (v) {
               final n = double.tryParse(v ?? '');
               if (n == null || n <= 0) return 'Enter a valid amount';
@@ -503,7 +555,8 @@ class _DepositSectionState extends State<_DepositSection> {
                 onTap: () => setState(() => _amountCtrl.text = a.toString()),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 160),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 7),
                   decoration: BoxDecoration(
                     color: sel ? _C.purpleGlowFaint : _C.surfaceCard,
                     borderRadius: BorderRadius.circular(20),
@@ -520,64 +573,64 @@ class _DepositSectionState extends State<_DepositSection> {
               );
             }).toList(),
           ),
-          const SizedBox(height: 18),
 
-          _FieldLabel('UTR / TRANSACTION ID'),
-          _StyledField(
-            controller: _utrCtrl, hint: 'Paste your UTR number here',
-            validator: (v) {
-              if (v == null || v.trim().isEmpty) return 'UTR is required';
-              if (v.trim().length < 6)           return 'Invalid UTR number';
-              return null;
-            },
+          const SizedBox(height: 22),
+
+          // ── Step 2: QR + UPI Pay ───────────
+          _StepBadge(number: '2', label: 'SCAN QR OR PAY WITH UPI APP'),
+          const SizedBox(height: 10),
+          _UpiPayCard(
+            upiLink: _upiLink,
+            hasAmount: hasAmount,
+            amount: amount,
+            onPayTap: _launchUpi,
           ),
-          const SizedBox(height: 18),
 
-          // UPI card
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: _C.surfaceCard,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _C.gold.withValues(alpha: 0.3)),
-              boxShadow: [BoxShadow(color: _C.goldGlow.withValues(alpha: 0.15), blurRadius: 20)],
-            ),
-            child: Column(children: [
-              Text('PAY TO THIS UPI', style: _ts(
-                  size: 9, weight: FontWeight.w800,
-                  color: _C.textMuted, letterSpacing: 1.4)),
-              const SizedBox(height: 14),
-              Container(
-                width: 130, height: 130,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
+          const SizedBox(height: 22),
+
+          // ── Step 3: UTR ────────────────────
+          AnimatedOpacity(
+            opacity: _paymentDone ? 1.0 : 0.45,
+            duration: const Duration(milliseconds: 300),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _StepBadge(number: '3', label: 'ENTER YOUR UTR NUMBER'),
+                const SizedBox(height: 10),
+                if (_paymentDone)
+                  _InfoBanner(
+                    icon: Icons.check_circle_outline_rounded,
+                    color: _C.success,
+                    text:
+                        'Great! Payment initiated. Now enter your UTR / '
+                        'Transaction ID from your UPI app to complete the request.',
+                  )
+                else
+                  _InfoBanner(
+                    icon: Icons.info_outline_rounded,
+                    color: _C.purple,
+                    text:
+                        'Complete the UPI payment above first, then enter your '
+                        'UTR number here to submit your deposit request.',
+                  ),
+                const SizedBox(height: 12),
+                _StyledField(
+                  controller: _utrCtrl,
+                  hint: 'Paste your UTR / Transaction ID',
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) return 'UTR is required';
+                    if (v.trim().length < 6) return 'Invalid UTR number';
+                    return null;
+                  },
                 ),
-                child: const Center(child: Text(
-                  'QR CODE\nHERE',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.black45, fontSize: 12),
-                )),
-              ),
-              const SizedBox(height: 12),
-              Text('shadowstorm@upi', style: _ts(
-                  size: 15, weight: FontWeight.w800, color: _C.gold)),
-              const SizedBox(height: 4),
-              Text('Pay and save your UTR number', style: _ts(
-                  size: 11, color: _C.textMuted)),
-            ]),
+              ],
+            ),
           ),
+
           const SizedBox(height: 18),
 
-          _InfoBanner(
-            icon: Icons.photo_camera_rounded, color: _C.gold,
-            text: 'After submitting, send your payment screenshot '
-                'to our Discord or Telegram support for approval.',
-          ),
-          const SizedBox(height: 14),
-
-          _FieldLabel('SEND SCREENSHOT FOR APPROVAL'),
+          // ── Support shortcuts ──────────────
+          _FieldLabel('SEND PAYMENT SCREENSHOT FOR FASTER APPROVAL'),
           const SizedBox(height: 8),
           Row(children: [
             Expanded(child: _SupportButton(
@@ -592,12 +645,14 @@ class _DepositSectionState extends State<_DepositSection> {
               onTap: () => _launch('https://t.me/Anonymaster_a'),
             )),
           ]),
+
           const SizedBox(height: 18),
 
           if (_error   != null) _StatusBanner(text: _error!,   isError: true),
           if (_success)         _StatusBanner(
-            text: '✅ Deposit submitted! Now send your payment screenshot '
-                  'to Discord or Telegram for approval.',
+            text:
+                '✅ Deposit request submitted! Your request is now pending '
+                'admin approval. Approvals happen daily 8 PM – 8 AM.',
             isError: false,
           ),
           const SizedBox(height: 4),
@@ -609,6 +664,190 @@ class _DepositSectionState extends State<_DepositSection> {
           ),
         ]),
       ),
+    );
+  }
+}
+
+// ── UPI Pay Card with QR ──────────────────────
+class _UpiPayCard extends StatelessWidget {
+  final String   upiLink;
+  final bool     hasAmount;
+  final double?  amount;
+  final VoidCallback onPayTap;
+
+  const _UpiPayCard({
+    required this.upiLink,
+    required this.hasAmount,
+    required this.amount,
+    required this.onPayTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: _C.surfaceCard,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _C.gold.withValues(alpha: 0.35)),
+        boxShadow: [
+          BoxShadow(
+              color: _C.goldGlow.withValues(alpha: 0.15), blurRadius: 20)
+        ],
+      ),
+      child: Column(children: [
+        Text('PAY TO THIS UPI', style: _ts(
+            size: 9, weight: FontWeight.w800,
+            color: _C.textMuted, letterSpacing: 1.4)),
+        const SizedBox(height: 16),
+
+        // QR code
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 250),
+          child: hasAmount && upiLink.isNotEmpty
+              ? Container(
+                  key: ValueKey(upiLink),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                          color: _C.gold.withValues(alpha: 0.25),
+                          blurRadius: 16)
+                    ],
+                  ),
+                  child: QrImageView(
+                    data: upiLink,
+                    version: QrVersions.auto,
+                    size: 160,
+                    backgroundColor: Colors.white,
+                    errorCorrectionLevel: QrErrorCorrectLevel.M,
+                  ),
+                )
+              : Container(
+                  key: const ValueKey('placeholder'),
+                  width: 160, height: 160,
+                  decoration: BoxDecoration(
+                    color: _C.surfaceElevated,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                        color: _C.border.withValues(alpha: 0.5)),
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.qr_code_2_rounded,
+                          color: _C.textMuted, size: 48),
+                      const SizedBox(height: 8),
+                      Text('Enter amount\nto generate QR',
+                          style: _ts(
+                              size: 11, color: _C.textMuted,
+                              height: 1.5),
+                          textAlign: TextAlign.center),
+                    ],
+                  ),
+                ),
+        ),
+
+        const SizedBox(height: 14),
+
+        // UPI ID display
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: _C.gold.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: _C.gold.withValues(alpha: 0.25)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.account_balance_rounded,
+                color: _C.gold, size: 15),
+            const SizedBox(width: 8),
+            Text(upiId, style: _ts(
+                size: 14, weight: FontWeight.w900, color: _C.gold)),
+          ]),
+        ),
+
+        if (amount != null && amount! > 0) ...[
+          const SizedBox(height: 6),
+          Text('Amount: ₹${amount!.toStringAsFixed(2)}',
+              style: _ts(size: 12, color: _C.textSecondary,
+                  weight: FontWeight.w600)),
+        ],
+
+        const SizedBox(height: 16),
+
+        // Pay with UPI button
+        GestureDetector(
+          onTap: hasAmount ? onPayTap : null,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            decoration: BoxDecoration(
+              gradient: hasAmount
+                  ? const LinearGradient(
+                      colors: [Color(0xFF9D55FF), Color(0xFF5865F2)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    )
+                  : LinearGradient(colors: [
+                      _C.surfaceElevated,
+                      _C.surfaceElevated
+                    ]),
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: hasAmount
+                  ? [
+                      BoxShadow(
+                          color: _C.purple.withValues(alpha: 0.45),
+                          blurRadius: 14,
+                          offset: const Offset(0, 4))
+                    ]
+                  : [],
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.payment_rounded,
+                    color: hasAmount ? Colors.white : _C.textMuted,
+                    size: 18),
+                const SizedBox(width: 8),
+                Text('PAY WITH UPI',
+                    style: _ts(
+                      size: 13,
+                      weight: FontWeight.w900,
+                      letterSpacing: 1.2,
+                      color: hasAmount ? Colors.white : _C.textMuted,
+                    )),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 10),
+
+        // UPI app chips
+        Wrap(
+          spacing: 8, runSpacing: 6,
+          alignment: WrapAlignment.center,
+          children: ['GPay', 'PhonePe', 'Paytm', 'BHIM'].map((app) =>
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: _C.surfaceElevated,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: _C.border),
+              ),
+              child: Text(app, style: _ts(
+                  size: 10, color: _C.textSecondary,
+                  weight: FontWeight.w600)),
+            ),
+          ).toList(),
+        ),
+      ]),
     );
   }
 }
@@ -630,25 +869,43 @@ class _WithdrawSectionState extends State<_WithdrawSection> {
   final _bankCtrl    = TextEditingController();
   final _accountCtrl = TextEditingController();
   final _ifscCtrl    = TextEditingController();
-  String  _method  = 'upi';
-  bool    _loading = false;
+
+  String  _method   = 'upi';
+  bool    _loading  = false;
   String? _error;
-  bool    _success = false;
+  bool    _success  = false;
+
+  // Live balance from stream (for UI validation)
+  double _liveBalance = 0.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _amountCtrl.addListener(() => setState(() {}));
+  }
 
   @override
   void dispose() {
-    for (final c in [_amountCtrl, _upiCtrl, _holderCtrl, _bankCtrl, _accountCtrl, _ifscCtrl]) {
-      c.dispose();
-    }
+    for (final c in [
+      _amountCtrl, _upiCtrl, _holderCtrl,
+      _bankCtrl, _accountCtrl, _ifscCtrl
+    ]) { c.dispose(); }
     super.dispose();
   }
 
+  double get _enteredAmount =>
+      double.tryParse(_amountCtrl.text.trim()) ?? 0.0;
+
+  bool get _exceedsBalance =>
+      _enteredAmount > 0 && _enteredAmount > _liveBalance;
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+    if (_exceedsBalance) return; // Double guard
     setState(() { _loading = true; _error = null; _success = false; });
     try {
       await widget.service.submitWithdrawRequest(
-        amount:        double.parse(_amountCtrl.text.trim()),
+        amount:        _enteredAmount,
         method:        _method,
         upiId:         _upiCtrl.text.trim(),
         accountHolder: _holderCtrl.text.trim(),
@@ -657,12 +914,13 @@ class _WithdrawSectionState extends State<_WithdrawSection> {
         ifscCode:      _ifscCtrl.text.trim(),
       );
       setState(() { _success = true; _loading = false; });
-      for (final c in [_amountCtrl, _upiCtrl, _holderCtrl, _bankCtrl, _accountCtrl, _ifscCtrl]) {
-        c.clear();
-      }
+      for (final c in [
+        _amountCtrl, _upiCtrl, _holderCtrl,
+        _bankCtrl, _accountCtrl, _ifscCtrl
+      ]) { c.clear(); }
     } catch (e) {
       setState(() {
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error   = e.toString().replaceFirst('Exception: ', '');
         _loading = false;
       });
     }
@@ -670,127 +928,300 @@ class _WithdrawSectionState extends State<_WithdrawSection> {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
-      child: Form(
-        key: _formKey,
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _InfoBanner(
-            icon: Icons.schedule_rounded, color: _C.gold,
-            text: 'Withdrawals are processed within 24 hours after admin approval.',
+    return StreamBuilder<WalletData>(
+      stream: widget.service.walletDataStream(),
+      builder: (ctx, snap) {
+        final walletData = snap.data ?? WalletData.empty;
+        _liveBalance = walletData.balance;
+
+        return SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
+          child: Form(
+            key: _formKey,
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+              // ── Live balance chip ──────────
+              _LiveBalanceChip(balance: _liveBalance),
+              const SizedBox(height: 16),
+
+              _InfoBanner(
+                icon: Icons.schedule_rounded, color: _C.gold,
+                text:
+                    'Withdrawals are processed within 24 hours after admin '
+                    'approval. Approvals happen daily 8 PM – 8 AM.',
+              ),
+              const SizedBox(height: 18),
+
+              _FieldLabel('WITHDRAW AMOUNT  (₹)'),
+              _StyledField(
+                controller: _amountCtrl,
+                hint: 'Enter amount',
+                keyboardType: TextInputType.number,
+                prefixText: '₹ ',
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))
+                ],
+                validator: (v) {
+                  final n = double.tryParse(v ?? '');
+                  if (n == null || n <= 0) return 'Enter a valid amount';
+                  if (n < 100) return 'Minimum withdrawal is ₹50';
+                  if (n > _liveBalance) {
+                    return 'Amount exceeds your available balance '
+                        '(₹${_liveBalance.toStringAsFixed(2)})';
+                  }
+                  return null;
+                },
+              ),
+
+              // ── Insufficient balance warning ──
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 280),
+                child: _exceedsBalance
+                    ? _InsufficientBalanceCard(
+                        key: const ValueKey('warn'),
+                        available: _liveBalance,
+                        requested: _enteredAmount,
+                      )
+                    : const SizedBox(key: ValueKey('none')),
+              ),
+
+              const SizedBox(height: 18),
+
+              _FieldLabel('WITHDRAWAL METHOD'),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(child: _MethodToggle(
+                  label: '📱  UPI',
+                  active: _method == 'upi',
+                  onTap: () => setState(() => _method = 'upi'),
+                )),
+                const SizedBox(width: 10),
+                Expanded(child: _MethodToggle(
+                  label: '🏦  Bank Transfer',
+                  active: _method == 'bank',
+                  onTap: () => setState(() => _method = 'bank'),
+                )),
+              ]),
+              const SizedBox(height: 18),
+
+              if (_method == 'upi') ...[
+                _FieldLabel('UPI ID'),
+                _StyledField(
+                  controller: _upiCtrl,
+                  hint: 'yourname@bank',
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) return 'UPI ID is required';
+                    if (!v.contains('@')) return 'Invalid UPI ID format';
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 14),
+                _FieldLabel('ACCOUNT HOLDER NAME'),
+                _StyledField(
+                  controller: _holderCtrl,
+                  hint: 'Full name as registered',
+                  validator: (v) =>
+                      (v == null || v.trim().isEmpty)
+                          ? 'Name is required'
+                          : null,
+                ),
+              ],
+
+              if (_method == 'bank') ...[
+                _FieldLabel('ACCOUNT HOLDER NAME'),
+                _StyledField(
+                  controller: _holderCtrl,
+                  hint: 'Full name as on bank account',
+                  validator: (v) =>
+                      (v == null || v.trim().isEmpty)
+                          ? 'Name is required'
+                          : null,
+                ),
+                const SizedBox(height: 14),
+                _FieldLabel('BANK NAME'),
+                _StyledField(
+                  controller: _bankCtrl,
+                  hint: 'e.g. State Bank of India',
+                  validator: (v) =>
+                      (v == null || v.trim().isEmpty)
+                          ? 'Bank name is required'
+                          : null,
+                ),
+                const SizedBox(height: 14),
+                _FieldLabel('ACCOUNT NUMBER'),
+                _StyledField(
+                  controller: _accountCtrl,
+                  hint: 'Enter account number',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) {
+                      return 'Account number is required';
+                    }
+                    if (v.trim().length < 8) return 'Invalid account number';
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 14),
+                _FieldLabel('IFSC CODE'),
+                _StyledField(
+                  controller: _ifscCtrl,
+                  hint: 'e.g. SBIN0001234',
+                  textCapitalization: TextCapitalization.characters,
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) return 'IFSC is required';
+                    if (v.trim().length != 11) {
+                      return 'IFSC must be 11 characters';
+                    }
+                    return null;
+                  },
+                ),
+              ],
+
+              const SizedBox(height: 18),
+
+              if (_error   != null) _StatusBanner(text: _error!,   isError: true),
+              if (_success)         _StatusBanner(
+                text:
+                    '✅ Withdrawal request submitted! Processing within '
+                    '24 hours after admin approval.',
+                isError: false,
+              ),
+              const SizedBox(height: 4),
+
+              _GlowButton(
+                label: _loading ? 'SUBMITTING…' : 'SUBMIT WITHDRAWAL',
+                icon: Icons.arrow_upward_rounded,
+                color: _exceedsBalance ? _C.textMuted : _C.live,
+                onTap: (_loading || _exceedsBalance) ? null : _submit,
+              ),
+            ]),
           ),
-          const SizedBox(height: 18),
+        );
+      },
+    );
+  }
+}
 
-          _FieldLabel('WITHDRAW AMOUNT  (₹)'),
-          _StyledField(
-            controller: _amountCtrl, hint: 'Enter amount',
-            keyboardType: TextInputType.number, prefixText: '₹ ',
-            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))],
-            validator: (v) {
-              final n = double.tryParse(v ?? '');
-              if (n == null || n <= 0) return 'Enter a valid amount';
-              if (n < 100)             return 'Minimum withdrawal is ₹100';
-              return null;
-            },
-          ),
-          const SizedBox(height: 18),
+// ─── Insufficient Balance Card ─────────────────
+class _InsufficientBalanceCard extends StatelessWidget {
+  final double available;
+  final double requested;
+  const _InsufficientBalanceCard({
+    super.key,
+    required this.available,
+    required this.requested,
+  });
 
-          _FieldLabel('WITHDRAWAL METHOD'),
-          const SizedBox(height: 8),
-          Row(children: [
-            Expanded(child: _MethodToggle(
-              label: '📱  UPI', active: _method == 'upi',
-              onTap: () => setState(() => _method = 'upi'),
-            )),
-            const SizedBox(width: 10),
-            Expanded(child: _MethodToggle(
-              label: '🏦  Bank Transfer', active: _method == 'bank',
-              onTap: () => setState(() => _method = 'bank'),
-            )),
-          ]),
-          const SizedBox(height: 18),
-
-          if (_method == 'upi') ...[
-            _FieldLabel('UPI ID'),
-            _StyledField(
-              controller: _upiCtrl, hint: 'yourname@bank',
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return 'UPI ID is required';
-                if (!v.contains('@'))              return 'Invalid UPI ID format';
-                return null;
-              },
-            ),
-            const SizedBox(height: 14),
-            _FieldLabel('ACCOUNT HOLDER NAME'),
-            _StyledField(
-              controller: _holderCtrl, hint: 'Full name as registered',
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'Name is required' : null,
-            ),
-          ],
-
-          if (_method == 'bank') ...[
-            _FieldLabel('ACCOUNT HOLDER NAME'),
-            _StyledField(
-              controller: _holderCtrl, hint: 'Full name as on bank account',
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'Name is required' : null,
-            ),
-            const SizedBox(height: 14),
-            _FieldLabel('BANK NAME'),
-            _StyledField(
-              controller: _bankCtrl, hint: 'e.g. State Bank of India',
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'Bank name is required' : null,
-            ),
-            const SizedBox(height: 14),
-            _FieldLabel('ACCOUNT NUMBER'),
-            _StyledField(
-              controller: _accountCtrl, hint: 'Enter account number',
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return 'Account number is required';
-                if (v.trim().length < 8)           return 'Invalid account number';
-                return null;
-              },
-            ),
-            const SizedBox(height: 14),
-            _FieldLabel('IFSC CODE'),
-            _StyledField(
-              controller: _ifscCtrl, hint: 'e.g. SBIN0001234',
-              textCapitalization: TextCapitalization.characters,
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return 'IFSC is required';
-                if (v.trim().length != 11)         return 'IFSC must be 11 characters';
-                return null;
-              },
-            ),
-          ],
-
-          const SizedBox(height: 18),
-
-          if (_error   != null) _StatusBanner(text: _error!,   isError: true),
-          if (_success)         _StatusBanner(
-            text: '✅ Withdrawal request submitted! Processing within 24 hours.',
-            isError: false,
-          ),
-          const SizedBox(height: 4),
-
-          _GlowButton(
-            label: _loading ? 'SUBMITTING…' : 'SUBMIT WITHDRAWAL',
-            icon: Icons.arrow_upward_rounded, color: _C.live,
-            onTap: _loading ? null : _submit,
-          ),
-        ]),
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _C.live.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _C.live.withValues(alpha: 0.5), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+              color: _C.liveGlow.withValues(alpha: 0.3),
+              blurRadius: 18,
+              spreadRadius: 1),
+        ],
       ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: _C.live.withValues(alpha: 0.15),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.warning_amber_rounded,
+              color: _C.live, size: 16),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('INSUFFICIENT WALLET BALANCE', style: _ts(
+              size: 11, weight: FontWeight.w900,
+              color: _C.live, letterSpacing: 0.8,
+            )),
+            const SizedBox(height: 4),
+            Text(
+              'You are trying to withdraw ₹${requested.toStringAsFixed(2)} '
+              'but your available balance is only '
+              '₹${available.toStringAsFixed(2)}.',
+              style: _ts(size: 11, color: _C.textSecondary, height: 1.5),
+            ),
+            const SizedBox(height: 8),
+            Row(children: [
+              _MiniStat(
+                  label: 'AVAILABLE',
+                  value: '₹${available.toStringAsFixed(2)}',
+                  color: _C.success),
+              const SizedBox(width: 16),
+              _MiniStat(
+                  label: 'REQUESTED',
+                  value: '₹${requested.toStringAsFixed(2)}',
+                  color: _C.live),
+            ]),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+class _MiniStat extends StatelessWidget {
+  final String label, value;
+  final Color  color;
+  const _MiniStat(
+      {required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: _ts(
+          size: 8, weight: FontWeight.w800,
+          color: _C.textMuted, letterSpacing: 0.8)),
+      Text(value, style: _ts(
+          size: 13, weight: FontWeight.w900, color: color)),
+    ]);
+  }
+}
+
+// ─── Live Balance Chip ─────────────────────────
+class _LiveBalanceChip extends StatelessWidget {
+  final double balance;
+  const _LiveBalanceChip({required this.balance});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: _C.success.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _C.success.withValues(alpha: 0.3)),
+      ),
+      child: Row(children: [
+        const Icon(Icons.account_balance_wallet_rounded,
+            color: _C.success, size: 16),
+        const SizedBox(width: 10),
+        Text('Available Balance:', style: _ts(
+            size: 12, color: _C.textSecondary)),
+        const Spacer(),
+        Text('₹${balance.toStringAsFixed(2)}', style: _ts(
+            size: 15, weight: FontWeight.w900, color: _C.success)),
+      ]),
     );
   }
 }
 
 // ═════════════════════════════════════════════
-// SECTION: HISTORY  (transactions + pending requests)
+// SECTION: HISTORY
 // ═════════════════════════════════════════════
 class _HistorySection extends StatelessWidget {
   final WalletService service;
@@ -802,7 +1233,7 @@ class _HistorySection extends StatelessWidget {
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // ── Pending deposit requests ─────────
+
         _SectionTitle(
             label: 'PENDING DEPOSITS',
             icon: Icons.add_circle_rounded, color: _C.success),
@@ -813,9 +1244,8 @@ class _HistorySection extends StatelessWidget {
             if (snap.connectionState == ConnectionState.waiting) {
               return const _InlineLoader();
             }
-            final list = (snap.data ?? [])
-                .where((r) => r.status == 'pending')
-                .toList();
+            final list =
+                (snap.data ?? []).where((r) => r.status == 'pending').toList();
             if (list.isEmpty) {
               return _EmptyInline(message: 'No pending deposits.');
             }
@@ -830,7 +1260,6 @@ class _HistorySection extends StatelessWidget {
 
         const SizedBox(height: 20),
 
-        // ── Pending withdrawal requests ──────
         _SectionTitle(
             label: 'PENDING WITHDRAWALS',
             icon: Icons.remove_circle_rounded, color: _C.live),
@@ -841,9 +1270,8 @@ class _HistorySection extends StatelessWidget {
             if (snap.connectionState == ConnectionState.waiting) {
               return const _InlineLoader();
             }
-            final list = (snap.data ?? [])
-                .where((r) => r.status == 'pending')
-                .toList();
+            final list =
+                (snap.data ?? []).where((r) => r.status == 'pending').toList();
             if (list.isEmpty) {
               return _EmptyInline(message: 'No pending withdrawals.');
             }
@@ -858,7 +1286,6 @@ class _HistorySection extends StatelessWidget {
 
         const SizedBox(height: 20),
 
-        // ── Full transaction history ─────────
         _SectionTitle(
             label: 'TRANSACTION HISTORY',
             icon: Icons.receipt_long_rounded, color: _C.purple),
@@ -875,7 +1302,8 @@ class _HistorySection extends StatelessWidget {
             final list = snap.data ?? [];
             if (list.isEmpty) {
               return _EmptyInline(
-                  message: 'No transactions yet.\nDeposit funds to get started!');
+                  message:
+                      'No transactions yet.\nDeposit funds to get started!');
             }
             return Column(
               children: list.map((tx) => Padding(
@@ -899,8 +1327,10 @@ class _SupportSection extends StatelessWidget {
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
       if (ctx.mounted) {
         ScaffoldMessenger.of(ctx).showSnackBar(
-        SnackBar(content: Text('Could not open: $url'), backgroundColor: _C.live),
-      );
+          SnackBar(
+              content: Text('Could not open: $url'),
+              backgroundColor: _C.live),
+        );
       }
     }
   }
@@ -913,7 +1343,8 @@ class _SupportSection extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _InfoBanner(
           icon: Icons.support_agent_rounded, color: _C.purple,
-          text: 'Need help? Contact our support team on Discord or Telegram. '
+          text:
+              'Need help? Contact our support team on Discord or Telegram. '
               'We usually respond within 30 minutes.',
         ),
         const SizedBox(height: 24),
@@ -923,7 +1354,6 @@ class _SupportSection extends StatelessWidget {
             icon: Icons.headset_mic_rounded, color: _C.purple),
         const SizedBox(height: 12),
 
-        // Discord card
         _PremiumSupportCard(
           platform: 'DISCORD',
           name: '! SHADOW',
@@ -936,7 +1366,6 @@ class _SupportSection extends StatelessWidget {
         ),
         const SizedBox(height: 12),
 
-        // Telegram card
         _PremiumSupportCard(
           platform: 'TELEGRAM',
           name: 'Anonymaster',
@@ -949,20 +1378,27 @@ class _SupportSection extends StatelessWidget {
         ),
         const SizedBox(height: 24),
 
-        // Common issues section
         _SectionTitle(
             label: 'COMMON ISSUES',
             icon: Icons.help_outline_rounded, color: _C.gold),
         const SizedBox(height: 12),
         ...[
-          ('My deposit is pending for too long?',
-              'Contact support with your UTR number. Approvals take 30 min.'),
-          ('Withdrawal not received?',
-              'Withdrawals take up to 24 hours. Contact support with your request ID.'),
-          ('Wrong UTR submitted?',
-              'Message support immediately on Discord or Telegram with the correct UTR.'),
-          ('Balance not updated after winning?',
-              'Winnings are credited within 30 minutes of tournament end. Contact support if delayed.'),
+          (
+            'My deposit is pending for too long?',
+            'Contact support with your UTR number. Approvals happen daily 8 PM – 8 AM.'
+          ),
+          (
+            'Withdrawal not received?',
+            'Withdrawals take up to 24 hours. Contact support with your request ID.'
+          ),
+          (
+            'Wrong UTR submitted?',
+            'Message support immediately on Discord or Telegram with the correct UTR.'
+          ),
+          (
+            'Balance not updated after winning?',
+            'Winnings are credited within 30 minutes of tournament end. Contact support if delayed.'
+          ),
         ].map((pair) {
           final (q, a) = pair;
           return Padding(
@@ -976,8 +1412,35 @@ class _SupportSection extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// SUB-WIDGETS
+// SUB-WIDGETS (cards, atoms)
 // ─────────────────────────────────────────────
+
+class _StepBadge extends StatelessWidget {
+  final String number, label;
+  const _StepBadge({required this.number, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      Container(
+        width: 24, height: 24,
+        decoration: BoxDecoration(
+          color: _C.purple,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(color: _C.purpleGlow, blurRadius: 8)
+          ],
+        ),
+        child: Center(child: Text(number, style: _ts(
+            size: 11, weight: FontWeight.w900, color: Colors.white))),
+      ),
+      const SizedBox(width: 8),
+      Text(label, style: _ts(
+          size: 10, weight: FontWeight.w800,
+          color: _C.textSecondary, letterSpacing: 1.2)),
+    ]);
+  }
+}
 
 class _PremiumSupportCard extends StatefulWidget {
   final String       platform, name, handle, serverLabel, badge;
@@ -989,7 +1452,8 @@ class _PremiumSupportCard extends StatefulWidget {
     required this.serverLabel, required this.color, required this.icon,
     required this.badge, required this.onTap,
   });
-  @override State<_PremiumSupportCard> createState() => _PremiumSupportCardState();
+  @override
+  State<_PremiumSupportCard> createState() => _PremiumSupportCardState();
 }
 
 class _PremiumSupportCardState extends State<_PremiumSupportCard>
@@ -999,7 +1463,8 @@ class _PremiumSupportCardState extends State<_PremiumSupportCard>
   @override
   void initState() {
     super.initState();
-    _ctrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 120));
+    _ctrl  = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 120));
     _scale = Tween(begin: 1.0, end: 0.97)
         .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
   }
@@ -1045,7 +1510,8 @@ class _PremiumSupportCardState extends State<_PremiumSupportCard>
                   )),
                   const SizedBox(width: 8),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
                       color: widget.color.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(4),
@@ -1059,11 +1525,10 @@ class _PremiumSupportCardState extends State<_PremiumSupportCard>
                 const SizedBox(height: 3),
                 Text(widget.name, style: _ts(
                     size: 14, weight: FontWeight.w800, color: _C.textPrimary)),
-                Text(widget.handle, style: _ts(
-                    size: 11, color: _C.textMuted)),
+                Text(widget.handle, style: _ts(size: 11, color: _C.textMuted)),
                 const SizedBox(height: 2),
-                Text(widget.serverLabel, style: _ts(
-                    size: 10, color: _C.textSecondary)),
+                Text(widget.serverLabel,
+                    style: _ts(size: 10, color: _C.textSecondary)),
               ],
             )),
             Icon(Icons.open_in_new_rounded,
@@ -1102,7 +1567,9 @@ class _FaqCardState extends State<_FaqCard> {
             Expanded(child: Text(widget.question, style: _ts(
                 size: 12, weight: FontWeight.w700, color: _C.textPrimary))),
             Icon(
-              _open ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+              _open
+                  ? Icons.expand_less_rounded
+                  : Icons.expand_more_rounded,
               color: _C.textMuted, size: 18,
             ),
           ]),
@@ -1135,28 +1602,36 @@ class _DepositReqCard extends StatelessWidget {
           Container(
             width: 36, height: 36,
             decoration: BoxDecoration(
-              color: _C.success.withValues(alpha: 0.1), shape: BoxShape.circle),
-            child: const Icon(Icons.add_rounded, color: _C.success, size: 18),
+                color: _C.success.withValues(alpha: 0.1),
+                shape: BoxShape.circle),
+            child:
+                const Icon(Icons.add_rounded, color: _C.success, size: 18),
           ),
           const SizedBox(width: 10),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Deposit Request', style: _ts(
-                size: 13, weight: FontWeight.w700)),
-            Text('UTR: ${req.utr}', style: _ts(
-                size: 11, color: _C.textMuted)),
-          ])),
+          Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Deposit Request',
+                  style: _ts(size: 13, weight: FontWeight.w700)),
+              Text('UTR: ${req.utr}',
+                  style: _ts(size: 11, color: _C.textMuted)),
+            ],
+          )),
           Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            Text('₹${req.amount.toStringAsFixed(2)}', style: _ts(
-                size: 15, weight: FontWeight.w900, color: _C.success)),
+            Text('₹${req.amount.toStringAsFixed(2)}',
+                style: _ts(
+                    size: 15, weight: FontWeight.w900, color: _C.success)),
             const SizedBox(height: 4),
             _StatusPill(status: req.status, color: statusColor),
           ]),
         ]),
         const SizedBox(height: 8),
-        Text(_timeAgo(req.createdAt), style: _ts(size: 10, color: _C.textMuted)),
+        Text(_timeAgo(req.createdAt),
+            style: _ts(size: 10, color: _C.textMuted)),
         if (req.adminNote != null) ...[
           const SizedBox(height: 6),
-          _InfoBanner(icon: Icons.message_rounded, color: _C.purple,
+          _InfoBanner(
+              icon: Icons.message_rounded, color: _C.purple,
               text: req.adminNote!),
         ],
       ]),
@@ -1182,33 +1657,40 @@ class _WithdrawReqCard extends StatelessWidget {
           Container(
             width: 36, height: 36,
             decoration: BoxDecoration(
-              color: _C.live.withValues(alpha: 0.1), shape: BoxShape.circle),
+                color: _C.live.withValues(alpha: 0.1),
+                shape: BoxShape.circle),
             child: const Icon(Icons.remove_rounded, color: _C.live, size: 18),
           ),
           const SizedBox(width: 10),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Withdrawal Request', style: _ts(
-                size: 13, weight: FontWeight.w700)),
-            Text(
-              req.method == 'upi'
-                  ? '📱 ${req.upiId}'
-                  : '🏦 ${req.accountHolder}',
-              style: _ts(size: 11, color: _C.textMuted),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ])),
+          Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Withdrawal Request',
+                  style: _ts(size: 13, weight: FontWeight.w700)),
+              Text(
+                req.method == 'upi'
+                    ? '📱 ${req.upiId}'
+                    : '🏦 ${req.accountHolder}',
+                style: _ts(size: 11, color: _C.textMuted),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          )),
           Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            Text('₹${req.amount.toStringAsFixed(2)}', style: _ts(
-                size: 15, weight: FontWeight.w900, color: _C.live)),
+            Text('₹${req.amount.toStringAsFixed(2)}',
+                style: _ts(
+                    size: 15, weight: FontWeight.w900, color: _C.live)),
             const SizedBox(height: 4),
             _StatusPill(status: req.status, color: statusColor),
           ]),
         ]),
         const SizedBox(height: 8),
-        Text(_timeAgo(req.createdAt), style: _ts(size: 10, color: _C.textMuted)),
+        Text(_timeAgo(req.createdAt),
+            style: _ts(size: 10, color: _C.textMuted)),
         if (req.adminNote != null) ...[
           const SizedBox(height: 6),
-          _InfoBanner(icon: Icons.message_rounded, color: _C.purple,
+          _InfoBanner(
+              icon: Icons.message_rounded, color: _C.purple,
               text: req.adminNote!),
         ],
       ]),
@@ -1221,24 +1703,24 @@ class _TxCard extends StatelessWidget {
   const _TxCard({required this.tx});
 
   IconData get _icon => switch (tx.type) {
-    'deposit'          => Icons.add_circle_rounded,
-    'withdrawal'       => Icons.remove_circle_rounded,
-    'tournament_entry' => Icons.sports_esports_rounded,
-    'winnings'         => Icons.emoji_events_rounded,
-    'refund'           => Icons.replay_rounded,
-    _                  => Icons.swap_horiz_rounded,
-  };
+        'deposit'          => Icons.add_circle_rounded,
+        'withdrawal'       => Icons.remove_circle_rounded,
+        'tournament_entry' => Icons.sports_esports_rounded,
+        'winnings'         => Icons.emoji_events_rounded,
+        'refund'           => Icons.replay_rounded,
+        _                  => Icons.swap_horiz_rounded,
+      };
 
   Color get _color => tx.isCredit ? _C.success : _C.live;
 
   String get _label => switch (tx.type) {
-    'deposit'          => 'Deposit',
-    'withdrawal'       => 'Withdrawal',
-    'tournament_entry' => 'Tournament Entry',
-    'winnings'         => 'Winnings',
-    'refund'           => 'Refund',
-    _                  => tx.type,
-  };
+        'deposit'          => 'Deposit',
+        'withdrawal'       => 'Withdrawal',
+        'tournament_entry' => 'Tournament Entry',
+        'winnings'         => 'Winnings',
+        'refund'           => 'Refund',
+        _                  => tx.type,
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -1254,7 +1736,7 @@ class _TxCard extends StatelessWidget {
         Container(
           width: 40, height: 40,
           decoration: BoxDecoration(
-            color: _color.withValues(alpha: 0.1), shape: BoxShape.circle),
+              color: _color.withValues(alpha: 0.1), shape: BoxShape.circle),
           child: Icon(_icon, color: _color, size: 20),
         ),
         const SizedBox(width: 12),
@@ -1264,7 +1746,8 @@ class _TxCard extends StatelessWidget {
             Text(_label, style: _ts(size: 13, weight: FontWeight.w700)),
             if (tx.description != null) ...[
               const SizedBox(height: 2),
-              Text(tx.description!, style: _ts(size: 11, color: _C.textMuted),
+              Text(tx.description!,
+                  style: _ts(size: 11, color: _C.textMuted),
                   overflow: TextOverflow.ellipsis),
             ],
             const SizedBox(height: 4),
@@ -1279,7 +1762,9 @@ class _TxCard extends StatelessWidget {
         const SizedBox(width: 8),
         Text(
           '${tx.isCredit ? '+' : '-'}₹${tx.amount.toStringAsFixed(2)}',
-          style: _ts(size: 14, weight: FontWeight.w900,
+          style: _ts(
+              size: 14,
+              weight: FontWeight.w900,
               color: tx.isCredit ? _C.success : _C.live),
         ),
       ]),
@@ -1309,20 +1794,22 @@ class _BalanceStat extends StatelessWidget {
           ? _ShimmerBox(width: 50, height: 14)
           : Text(
               '₹${value!.toStringAsFixed(0)}',
-              style: _ts(size: 12, weight: FontWeight.w800, color: color),
+              style: _ts(
+                  size: 12, weight: FontWeight.w800, color: color),
               overflow: TextOverflow.ellipsis,
             ),
       const SizedBox(height: 2),
-      Text(label, style: _ts(size: 8, weight: FontWeight.w700,
+      Text(label, style: _ts(
+          size: 8, weight: FontWeight.w700,
           color: _C.textMuted, letterSpacing: 0.8)),
     ]);
   }
 }
 
 class _SupportButton extends StatefulWidget {
-  final String label, sublabel;
-  final Color color;
-  final IconData icon;
+  final String       label, sublabel;
+  final Color        color;
+  final IconData     icon;
   final VoidCallback onTap;
   const _SupportButton({
     required this.label, required this.sublabel,
@@ -1338,7 +1825,8 @@ class _SupportButtonState extends State<_SupportButton>
   @override
   void initState() {
     super.initState();
-    _ctrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 120));
+    _ctrl  = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 120));
     _scale = Tween(begin: 1.0, end: 0.96)
         .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
   }
@@ -1353,28 +1841,36 @@ class _SupportButtonState extends State<_SupportButton>
       child: ScaleTransition(
         scale: _scale,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
           decoration: BoxDecoration(
             color: widget.color.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: widget.color.withValues(alpha: 0.45)),
+            border: Border.all(
+                color: widget.color.withValues(alpha: 0.45)),
             boxShadow: [BoxShadow(
               color: widget.color.withValues(alpha: 0.18),
               blurRadius: 12, offset: const Offset(0, 4),
             )],
           ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
             Row(children: [
               Icon(widget.icon, color: widget.color, size: 18),
               const SizedBox(width: 6),
-              Expanded(child: Text(widget.label, style: _ts(
-                  size: 12, weight: FontWeight.w800, color: widget.color),
+              Expanded(child: Text(widget.label,
+                  style: _ts(
+                      size: 12,
+                      weight: FontWeight.w800,
+                      color: widget.color),
                   overflow: TextOverflow.ellipsis)),
               Icon(Icons.open_in_new_rounded,
                   color: widget.color.withValues(alpha: 0.6), size: 13),
             ]),
             const SizedBox(height: 4),
-            Text(widget.sublabel, style: _ts(size: 10, color: _C.textMuted),
+            Text(widget.sublabel,
+                style: _ts(size: 10, color: _C.textMuted),
                 overflow: TextOverflow.ellipsis),
           ]),
         ),
@@ -1384,9 +1880,9 @@ class _SupportButtonState extends State<_SupportButton>
 }
 
 class _GlowButton extends StatefulWidget {
-  final String label;
-  final IconData icon;
-  final Color color;
+  final String       label;
+  final IconData     icon;
+  final Color        color;
   final VoidCallback? onTap;
   const _GlowButton({
     required this.label, required this.icon,
@@ -1402,7 +1898,8 @@ class _GlowButtonState extends State<_GlowButton>
   @override
   void initState() {
     super.initState();
-    _ctrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 120));
+    _ctrl  = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 120));
     _scale = Tween(begin: 1.0, end: 0.97)
         .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
   }
@@ -1424,23 +1921,32 @@ class _GlowButtonState extends State<_GlowButton>
             gradient: LinearGradient(
               colors: disabled
                   ? [_C.surfaceElevated, _C.surfaceElevated]
-                  : [widget.color, widget.color.withValues(alpha: 0.75)],
-              begin: Alignment.topLeft, end: Alignment.bottomRight,
+                  : [widget.color,
+                     widget.color.withValues(alpha: 0.75)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(14),
-            boxShadow: disabled ? [] : [BoxShadow(
-              color: widget.color.withValues(alpha: 0.4),
-              blurRadius: 16, offset: const Offset(0, 4),
-            )],
+            boxShadow: disabled
+                ? []
+                : [BoxShadow(
+                    color: widget.color.withValues(alpha: 0.4),
+                    blurRadius: 16, offset: const Offset(0, 4),
+                  )],
           ),
-          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
             Icon(widget.icon,
                 color: disabled ? _C.textMuted : Colors.white, size: 18),
             const SizedBox(width: 10),
-            Text(widget.label, style: _ts(
-              size: 13, weight: FontWeight.w900, letterSpacing: 1.2,
-              color: disabled ? _C.textMuted : Colors.white,
-            )),
+            Text(widget.label,
+                style: _ts(
+                  size: 13,
+                  weight: FontWeight.w900,
+                  letterSpacing: 1.2,
+                  color: disabled ? _C.textMuted : Colors.white,
+                )),
           ]),
         ),
       ),
@@ -1449,10 +1955,12 @@ class _GlowButtonState extends State<_GlowButton>
 }
 
 class _MethodToggle extends StatelessWidget {
-  final String label;
-  final bool active;
+  final String       label;
+  final bool         active;
   final VoidCallback onTap;
-  const _MethodToggle({required this.label, required this.active, required this.onTap});
+  const _MethodToggle(
+      {required this.label, required this.active, required this.onTap});
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
@@ -1464,9 +1972,12 @@ class _MethodToggle extends StatelessWidget {
           color: active ? _C.purpleGlowFaint : _C.surfaceCard,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: active ? _C.purple : _C.border, width: active ? 1.5 : 1),
+              color: active ? _C.purple : _C.border,
+              width: active ? 1.5 : 1),
           boxShadow: active
-              ? [BoxShadow(color: _C.purpleGlow.withValues(alpha: 0.4), blurRadius: 10)]
+              ? [BoxShadow(
+                  color: _C.purpleGlow.withValues(alpha: 0.4),
+                  blurRadius: 10)]
               : [],
         ),
         child: Center(child: Text(label, style: _ts(
@@ -1504,9 +2015,11 @@ class _StyledField extends StatelessWidget {
       decoration: InputDecoration(
         hintText: hint, prefixText: prefixText,
         hintStyle: _ts(size: 13, color: _C.textMuted),
-        prefixStyle: _ts(size: 14, weight: FontWeight.w700, color: _C.textSecondary),
+        prefixStyle: _ts(
+            size: 14, weight: FontWeight.w700, color: _C.textSecondary),
         filled: true, fillColor: _C.surfaceCard,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: _C.border),
@@ -1544,14 +2057,17 @@ class _FieldLabel extends StatelessWidget {
 }
 
 class _SectionTitle extends StatelessWidget {
-  final String label;
+  final String   label;
   final IconData icon;
-  final Color color;
-  const _SectionTitle({required this.label, required this.icon, required this.color});
+  final Color    color;
+  const _SectionTitle(
+      {required this.label, required this.icon, required this.color});
+
   @override
   Widget build(BuildContext context) {
     return Row(children: [
-      Container(width: 3, height: 16,
+      Container(
+          width: 3, height: 16,
           decoration: BoxDecoration(
               color: color, borderRadius: BorderRadius.circular(2))),
       const SizedBox(width: 8),
@@ -1568,6 +2084,7 @@ class _StatusPill extends StatelessWidget {
   final String status;
   final Color  color;
   const _StatusPill({required this.status, required this.color});
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -1588,7 +2105,9 @@ class _InfoBanner extends StatelessWidget {
   final IconData icon;
   final Color    color;
   final String   text;
-  const _InfoBanner({required this.icon, required this.color, required this.text});
+  const _InfoBanner(
+      {required this.icon, required this.color, required this.text});
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -1601,7 +2120,8 @@ class _InfoBanner extends StatelessWidget {
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Icon(icon, color: color, size: 15),
         const SizedBox(width: 10),
-        Expanded(child: Text(text, style: _ts(size: 12, color: _C.textSecondary))),
+        Expanded(child: Text(text,
+            style: _ts(size: 12, color: _C.textSecondary))),
       ]),
     );
   }
@@ -1611,6 +2131,7 @@ class _StatusBanner extends StatelessWidget {
   final String text;
   final bool   isError;
   const _StatusBanner({required this.text, required this.isError});
+
   @override
   Widget build(BuildContext context) {
     final color = isError ? _C.live : _C.success;
@@ -1624,11 +2145,14 @@ class _StatusBanner extends StatelessWidget {
       ),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Icon(
-          isError ? Icons.error_outline_rounded : Icons.check_circle_rounded,
+          isError
+              ? Icons.error_outline_rounded
+              : Icons.check_circle_rounded,
           color: color, size: 17,
         ),
         const SizedBox(width: 10),
-        Expanded(child: Text(text, style: _ts(size: 12, color: _C.textSecondary))),
+        Expanded(child: Text(text,
+            style: _ts(size: 12, color: _C.textSecondary))),
       ]),
     );
   }
@@ -1642,7 +2166,8 @@ class _InlineLoader extends StatelessWidget {
       padding: EdgeInsets.symmetric(vertical: 16),
       child: Center(child: SizedBox(
         width: 24, height: 24,
-        child: CircularProgressIndicator(color: _C.purple, strokeWidth: 2),
+        child: CircularProgressIndicator(
+            color: _C.purple, strokeWidth: 2),
       )),
     );
   }
@@ -1661,16 +2186,18 @@ class _EmptyInline extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _C.border),
       ),
-      child: Text(message, style: _ts(size: 12, color: _C.textMuted),
+      child: Text(message,
+          style: _ts(size: 12, color: _C.textMuted),
           textAlign: TextAlign.center),
     );
   }
 }
 
 class _PulseDot extends StatelessWidget {
-  final Color            color;
+  final Color             color;
   final Animation<double> pulse;
   const _PulseDot({required this.color, required this.pulse});
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -1680,7 +2207,8 @@ class _PulseDot extends StatelessWidget {
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: color.withValues(alpha: 0.5 + 0.5 * pulse.value),
-          boxShadow: [BoxShadow(color: color.withValues(alpha: 0.6),
+          boxShadow: [BoxShadow(
+              color: color.withValues(alpha: 0.6),
               blurRadius: 5 * pulse.value)],
         ),
       ),
@@ -1701,11 +2229,13 @@ class _ShimmerBoxState extends State<_ShimmerBox>
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this,
-        duration: const Duration(milliseconds: 1100))..repeat(reverse: true);
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1100))
+      ..repeat(reverse: true);
     _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
   }
   @override void dispose() { _ctrl.dispose(); super.dispose(); }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -1713,7 +2243,8 @@ class _ShimmerBoxState extends State<_ShimmerBox>
       builder: (_, _) => Container(
         width: widget.width, height: widget.height,
         decoration: BoxDecoration(
-          color: _C.surfaceElevated.withValues(alpha: 0.5 + 0.4 * _anim.value),
+          color: _C.surfaceElevated.withValues(
+              alpha: 0.5 + 0.4 * _anim.value),
           borderRadius: BorderRadius.circular(8),
         ),
       ),
@@ -1724,40 +2255,6 @@ class _ShimmerBoxState extends State<_ShimmerBox>
 // ─────────────────────────────────────────────
 // CUSTOM PAINTERS
 // ─────────────────────────────────────────────
-
-class _ParticlePainter extends CustomPainter {
-  final double progress;
-  static final _rng = math.Random(42);
-  static final _particles = List.generate(22, (i) => [
-    _rng.nextDouble(), // x fraction
-    _rng.nextDouble(), // y fraction
-    _rng.nextDouble() * 3 + 1, // size
-    _rng.nextDouble(), // speed offset
-  ]);
-
-  const _ParticlePainter({required this.progress});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    for (final p in _particles) {
-      final t  = (progress + p[3]) % 1.0;
-      final x  = p[0] * size.width;
-      final y  = (p[1] - t * 0.4) % 1.0 * size.height;
-      final r  = p[2];
-      final alpha = (math.sin(t * math.pi) * 0.5).clamp(0.0, 0.5);
-      canvas.drawCircle(
-        Offset(x, y),
-        r,
-        Paint()
-          ..color = const Color(0xFF9D55FF).withValues(alpha: alpha)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _ParticlePainter old) => old.progress != progress;
-}
 
 class _HoloPainter extends CustomPainter {
   @override
@@ -1778,6 +2275,7 @@ class _HoloPainter extends CustomPainter {
           Offset(x, 0), Offset(x - size.height * 0.6, size.height), diag);
     }
   }
+
   @override
   bool shouldRepaint(covariant CustomPainter _) => false;
 }

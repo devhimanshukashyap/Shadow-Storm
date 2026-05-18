@@ -726,12 +726,12 @@ class _PlayerStatsGrid extends StatelessWidget {
         value: profile.winRate,
         color: SSColors.successGreen,
       ),
-      _StatData(
-        icon: Icons.local_fire_department_rounded,
-        label: 'Best Streak',
-        value: '5W',       // TODO: fetch from Firestore if tracked
-        color: SSColors.live,
-      ),
+      // _StatData(
+      //   icon: Icons.local_fire_department_rounded,
+      //   label: 'Best Streak',
+      //   value: '5W',       // TODO: fetch from Firestore if tracked
+      //   color: SSColors.live,
+      // ),
     ];
 
     return Padding(
