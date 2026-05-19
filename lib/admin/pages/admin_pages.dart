@@ -1,14 +1,15 @@
 // lib/admin/pages/admin_pages.dart
 // ─────────────────────────────────────────────
 // SHADOW STORM — Admin Pages Barrel
-// Phase 3: Withdrawals + Users are LIVE
-// Tournaments, Logs, Settings remain as placeholders
+// Phase 4: Tournaments LIVE ✓
+// Logs, Settings remain as placeholders → Phase 5
 // ─────────────────────────────────────────────
 
 export 'admin_dashboard_page.dart';
 export 'admin_deposits_page.dart';
 export 'admin_withdrawals_page.dart';
 export 'admin_users_page.dart';
+export 'admin_tournaments_page.dart';
 
 import 'package:flutter/material.dart';
 import '../widgets/admin_page_container.dart';
@@ -153,35 +154,7 @@ class _AdminPlaceholderPage extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// TOURNAMENTS PAGE (Phase 4 placeholder)
-// ─────────────────────────────────────────────
-class AdminTournamentsPage extends StatelessWidget {
-  const AdminTournamentsPage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const _AdminPlaceholderPage(
-      title:    'Tournament Management',
-      subtitle: 'Create, edit, and manage esports tournaments',
-      icon:     Icons.emoji_events_rounded,
-      color:    AdminColors.gold,
-      phase:    'Phase 4',
-      plannedFeatures: [
-        'Create new tournaments with full configuration (title, mode, prize pool, entry fee, slots)',
-        'Upload tournament banner image via Firebase Storage',
-        'Set and update tournament status: upcoming → live → completed',
-        'Feature / un-feature tournaments on the player home screen',
-        'View full participant list per tournament with join timestamps',
-        'Distribute prize pool to winners — atomic batch wallet credits',
-        'Cancel tournaments with auto-refund to all registered players',
-        'Tournament stats: fill rate, revenue, prize paid out',
-      ],
-    );
-  }
-}
-
-// ─────────────────────────────────────────────
-// LOGS PAGE (Phase 4 placeholder)
+// LOGS PAGE (Phase 5 placeholder)
 // ─────────────────────────────────────────────
 class AdminLogsPage extends StatelessWidget {
   const AdminLogsPage({super.key});
@@ -190,25 +163,25 @@ class AdminLogsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return const _AdminPlaceholderPage(
       title:    'System Logs',
-      subtitle: 'Audit trail for all admin actions',
+      subtitle: 'Full audit trail for all admin actions',
       icon:     Icons.receipt_long_rounded,
       color:    AdminColors.warning,
-      phase:    'Phase 4',
+      phase:    'Phase 5',
       plannedFeatures: [
-        'Full real-time stream of admin_logs collection',
-        'Every action logged: deposit_approved, withdrawal_approved, withdrawal_rejected, balance_adjusted, admin_promoted, admin_demoted, account_frozen',
+        'Real-time stream of admin_logs collection with infinite scroll',
         'Filter by action type, admin UID, target user UID, date range',
-        'Color-coded action badges matching existing AdminColors tokens',
-        'Click any log entry to view full details map',
+        'Color-coded action badges: deposit_approved, withdrawal_approved, prize_distributed, tournament_cancelled, etc.',
+        'Click any log entry to expand full details payload',
         'Export filtered logs to CSV for accounting / compliance',
-        'Log count statistics by action type',
+        'Log statistics dashboard: actions per day, most active admin, top action types',
+        'Search by keyword across all log fields',
       ],
     );
   }
 }
 
 // ─────────────────────────────────────────────
-// SETTINGS PAGE (Phase 4 placeholder)
+// SETTINGS PAGE (Phase 5 placeholder)
 // ─────────────────────────────────────────────
 class AdminSettingsPage extends StatelessWidget {
   const AdminSettingsPage({super.key});
@@ -220,16 +193,17 @@ class AdminSettingsPage extends StatelessWidget {
       subtitle: 'Platform configuration and operational settings',
       icon:     Icons.settings_rounded,
       color:    Color(0xFF9B8DC0),
-      phase:    'Phase 4',
+      phase:    'Phase 5',
       plannedFeatures: [
-        'Read/write config/admin_settings Firestore document',
-        'UPI payment details: UPI ID + payee name shown to players',
-        'Minimum and maximum deposit / withdrawal amount limits',
-        'Maintenance mode toggle — blocks player actions in main app',
+        'Read/write config/admin_settings Firestore document in real-time',
+        'UPI payment details editor: UPI ID + payee name shown to players',
+        'Minimum and maximum deposit/withdrawal amount limits',
+        'Maintenance mode toggle — blocks player actions across the main app',
+        'Freeze system: freeze/unfreeze all wallet operations platform-wide',
+        'Security controls: require 2FA, session timeout, IP whitelist',
+        'View and promote/demote all admin accounts from one place',
+        'Platform branding: app name, support contact, social links',
         'Discord webhook URL display (read-only from AppSecrets)',
-        'Approval time window configuration (e.g. 8PM–8AM IST)',
-        'View all admin accounts — promote/demote from settings',
-        'Platform branding: app name, support contact',
       ],
     );
   }

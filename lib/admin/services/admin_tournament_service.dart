@@ -228,9 +228,21 @@ class AdminTournamentService {
         .collection('tournaments')
         .doc(tournamentId)
         .collection('participants')
-        .orderBy('joinedAt', descending: false)
         .snapshots()
-        .map((snap) => snap.docs.map((d) => AdminParticipant.fromDoc(d)).toList());
+        .map((snap) {
+          final list = snap.docs
+              .map((d) => AdminParticipant.fromDoc(d))
+              .toList();
+ 
+          list.sort((a, b) {
+            if (a.joinedAt == null && b.joinedAt == null) return 0;
+            if (a.joinedAt == null) return 1;
+            if (b.joinedAt == null) return -1;
+            return a.joinedAt!.compareTo(b.joinedAt!);
+          });
+ 
+          return list;
+        });
   }
 
   // ──────────────────────────────────────────────────────
