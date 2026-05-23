@@ -630,10 +630,11 @@ class _TournamentListCardState extends State<_TournamentListCard>
   }
 
   Color _statusAccentColor(TournamentModel t) {
-    switch (t.status) {
+    switch (t.status) { //error on switch
       case TournamentStatus.live:      return _C.live;
       case TournamentStatus.completed: return _C.textMuted;
       case TournamentStatus.upcoming:  return _C.purple;
+      case TournamentStatus.cancelled: return _C.textMuted; 
     }
   }
 }
@@ -654,6 +655,8 @@ class _StatusPill extends StatelessWidget {
         color = _C.textMuted; label = 'ENDED'; break;
       case TournamentStatus.upcoming:
         color = _C.gold; label = 'UPCOMING'; break;
+          case TournamentStatus.cancelled:
+    color = _C.textMuted; label = 'CANCELLED';   break;
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),

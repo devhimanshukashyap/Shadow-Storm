@@ -1,19 +1,25 @@
 // lib/models/tournament_model.dart
 // ─────────────────────────────────────────────
-// TOURNAMENT MODEL  (v2 — adds rewardDescription)
-// Mirrors Firestore document structure exactly.
-// All fields nullable so partial docs don't crash.
+// SHADOW STORM — Tournament Model (v3)
+//
+// Changes from v2:
+//   • requiredSlots / maxSlots fields (team-size control)
+//   • New tournamentType values: '2v2', '1v1_arena', 'lose_to_win',
+//     'sniper', 'custom_league' added to _typeLabel / status helpers
+//   • roomRevealTime, cancelledStatus, minimumLevel unchanged
+//   • copyWith extended with requiredSlots / maxSlots
 // ─────────────────────────────────────────────
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 // ── Status Enum ──────────────────────────────
-enum TournamentStatus { upcoming, live, completed }
+enum TournamentStatus { upcoming, live, completed, cancelled }
 
 TournamentStatus statusFromString(String? s) {
   switch (s) {
     case 'live':      return TournamentStatus.live;
     case 'completed': return TournamentStatus.completed;
+    case 'cancelled': return TournamentStatus.cancelled;
     default:          return TournamentStatus.upcoming;
   }
 }
@@ -22,6 +28,7 @@ String statusToString(TournamentStatus s) {
   switch (s) {
     case TournamentStatus.live:      return 'live';
     case TournamentStatus.completed: return 'completed';
+    case TournamentStatus.cancelled: return 'cancelled';
     case TournamentStatus.upcoming:  return 'upcoming';
   }
 }
@@ -53,10 +60,12 @@ class TournamentModel {
   final String? bannerUrl;
 
   // Tournament config
-  // tournamentType: 'battle_royale' | 'clash_squad' | 'lone_wolf' | 'league'
   final String tournamentType;
-  final String mode;  // 'Squad' | 'Duo' | 'Solo'
-  final String map;   // 'Bermuda' | 'Kalahari' | etc.
+  // Valid values:
+  //   'battle_royale' | 'clash_squad' | '2v2' | 'lone_wolf' |
+  //   'lose_to_win'   | 'custom_league' | '1v1_arena' | 'sniper'
+  final String mode; // 'Squad' | 'Duo' | 'Solo' | '2v2' | '1v1'
+  final String map;
 
   // Entry & prize
   final double entryFee;
@@ -66,28 +75,33 @@ class TournamentModel {
   final int maxPlayers;
   final int joinedPlayers;
 
-  // Room info (revealed before match)
-  final String? roomId;
-  final String? roomPassword;
+  // Team slot config (new v3)
+  final int requiredSlots; // min players per team to register (1 = solo)
+  final int maxSlots;      // max players per team (flexible for squad: 2–4)
+
+  // Room credentials
+  final String?   roomId;
+  final String?   roomPassword;
+  final DateTime? roomRevealTime;
 
   // Rules & rewards
-  final String? rules;
-  final String  rewardType;     // 'survival' | 'kill' | 'position' | 'mixed'
-  final double  killReward;
-  final double  survivalReward;
+  final String?              rules;
+  final String               rewardType;
+  final double               killReward;
+  final double               survivalReward;
   final List<PositionReward> positions;
-
-  // ✅ NEW: Admin-authored reward description / general info text
-  // Supports multi-line. Admin fills this in Firestore to explain
-  // how rewards work, special rules, prize distribution details, etc.
-  final String? rewardDescription;
+  final String?              rewardDescription;
 
   // Scheduling
   final TournamentStatus status;
   final DateTime?        startTime;
   final bool             featured;
 
+  // Access control
+  final int minimumLevel;
+
   // Meta
+  final bool      prizesDistributed;
   final DateTime? createdAt;
 
   const TournamentModel({
@@ -102,8 +116,11 @@ class TournamentModel {
     required this.prizePool,
     required this.maxPlayers,
     required this.joinedPlayers,
+    this.requiredSlots = 1,
+    this.maxSlots      = 1,
     this.roomId,
     this.roomPassword,
+    this.roomRevealTime,
     this.rules,
     required this.rewardType,
     required this.killReward,
@@ -113,6 +130,8 @@ class TournamentModel {
     required this.status,
     this.startTime,
     required this.featured,
+    this.minimumLevel      = 0,
+    this.prizesDistributed = false,
     this.createdAt,
   });
 
@@ -138,22 +157,70 @@ class TournamentModel {
       prizePool:         (d['prizePool']        as num?)?.toDouble() ?? 0.0,
       maxPlayers:        (d['maxPlayers']       as num?)?.toInt()    ?? 0,
       joinedPlayers:     (d['joinedPlayers']    as num?)?.toInt()    ?? 0,
+      requiredSlots:     (d['requiredSlots']    as num?)?.toInt()    ?? 1,
+      maxSlots:          (d['maxSlots']         as num?)?.toInt()    ?? 1,
       roomId:            d['roomId']            as String?,
       roomPassword:      d['roomPassword']      as String?,
+      roomRevealTime:    (d['roomRevealTime']   as Timestamp?)?.toDate(),
       rules:             d['rules']             as String?,
       rewardType:        d['rewardType']        as String? ?? 'position',
       killReward:        (d['killReward']       as num?)?.toDouble() ?? 0.0,
       survivalReward:    (d['survivalReward']   as num?)?.toDouble() ?? 0.0,
       positions:         positionList,
-      rewardDescription: d['rewardDescription'] as String?,    // ✅ NEW
+      rewardDescription: d['rewardDescription'] as String?,
       status:            statusFromString(d['status'] as String?),
       startTime:         (d['startTime'] as Timestamp?)?.toDate(),
       featured:          d['featured'] as bool? ?? false,
+      minimumLevel:      (d['minimumLevel']     as num?)?.toInt()    ?? 0,
+      prizesDistributed: d['prizesDistributed'] as bool? ?? false,
       createdAt:         (d['createdAt'] as Timestamp?)?.toDate(),
     );
   }
 
+  // ── copyWith ─────────────────────────────────
+  TournamentModel copyWith({
+    int?              joinedPlayers,
+    String?           roomId,
+    String?           roomPassword,
+    TournamentStatus? status,
+    int?              requiredSlots,
+    int?              maxSlots,
+  }) {
+    return TournamentModel(
+      id:                id,
+      title:             title,
+      subtitle:          subtitle,
+      bannerUrl:         bannerUrl,
+      tournamentType:    tournamentType,
+      mode:              mode,
+      map:               map,
+      entryFee:          entryFee,
+      prizePool:         prizePool,
+      maxPlayers:        maxPlayers,
+      joinedPlayers:     joinedPlayers    ?? this.joinedPlayers,
+      requiredSlots:     requiredSlots    ?? this.requiredSlots,
+      maxSlots:          maxSlots         ?? this.maxSlots,
+      roomId:            roomId           ?? this.roomId,
+      roomPassword:      roomPassword     ?? this.roomPassword,
+      roomRevealTime:    roomRevealTime,
+      rules:             rules,
+      rewardType:        rewardType,
+      killReward:        killReward,
+      survivalReward:    survivalReward,
+      positions:         positions,
+      rewardDescription: rewardDescription,
+      status:            status           ?? this.status,
+      startTime:         startTime,
+      featured:          featured,
+      minimumLevel:      minimumLevel,
+      prizesDistributed: prizesDistributed,
+      createdAt:         createdAt,
+    );
+  }
+
   // ── Computed helpers ─────────────────────────
+
+  bool get isTeamTournament => requiredSlots > 1;
 
   String get entryFeeDisplay =>
       entryFee <= 0 ? 'FREE' : '₹${_formatAmount(entryFee)}';
@@ -165,16 +232,23 @@ class TournamentModel {
   bool get isAlmostFull =>
       slotsLeft > 0 && slotsLeft < (maxPlayers * 0.2).ceil();
 
+  bool get isFull => slotsLeft <= 0;
+
   double get fillPercent =>
       maxPlayers > 0 ? (joinedPlayers / maxPlayers).clamp(0.0, 1.0) : 0.0;
+
+  bool get isActive =>
+      status == TournamentStatus.upcoming || status == TournamentStatus.live;
+
+  bool get isCompleted => status == TournamentStatus.completed;
+
+  bool get isCancelled => status == TournamentStatus.cancelled;
 
   String get startTimeDisplay {
     if (status == TournamentStatus.live) return 'LIVE NOW';
     if (startTime == null) return 'TBD';
-
     final now  = DateTime.now();
     final diff = startTime!.difference(now);
-
     if (diff.inDays == 0) {
       return 'Today • ${_timeStr(startTime!)}';
     } else if (diff.inDays == 1) {
@@ -190,18 +264,29 @@ class TournamentModel {
     return '$mode • $typeLabel';
   }
 
-  /// Human-readable tournament type label
-  static String _typeLabel(String type) {
-    switch (type) {
-      case 'battle_royale': return 'Full Map';
-      case 'clash_squad':   return 'Clash Squad';
-      case 'lone_wolf':     return 'Lone Wolf';
-      case 'league':        return 'League';
-      default:              return type;
-    }
+  String get typeLabelDisplay => _typeLabel(tournamentType);
+
+  /// Human-readable team size string e.g. "Solo", "Duo", "Squad (4)"
+  String get teamSizeDisplay {
+    if (requiredSlots == 1) return 'Solo';
+    if (requiredSlots == 2) return 'Duo';
+    if (requiredSlots == 4) return 'Squad';
+    return '$requiredSlots Players';
   }
 
-  String get typeLabelDisplay => _typeLabel(tournamentType);
+  static String _typeLabel(String type) {
+    switch (type) {
+      case 'battle_royale':  return 'Battle Royale';
+      case 'clash_squad':    return 'Clash Squad';
+      case '2v2':            return '2v2 Arena';
+      case 'lone_wolf':      return 'Lone Wolf';
+      case 'lose_to_win':    return 'Lose To Win';
+      case 'custom_league':  return 'Custom League';
+      case '1v1_arena':      return '1v1 Arena';
+      case 'sniper':         return 'Sniper Challenge';
+      default:               return type;
+    }
+  }
 
   // ── Private helpers ──────────────────────────
   String _timeStr(DateTime dt) {
@@ -218,9 +303,7 @@ class TournamentModel {
       final thousand = (amount % 100000) ~/ 1000;
       final rest     = (amount % 1000).toInt();
       if (rest == 0 && thousand == 0) return '$lakh,00,000';
-      if (rest == 0) {
-        return '$lakh,${thousand.toString().padLeft(2, '0')},000';
-      }
+      if (rest == 0) return '$lakh,${thousand.toString().padLeft(2, '0')},000';
       return '$lakh,${thousand.toString().padLeft(2, '0')},${rest.toString().padLeft(3, '0')}';
     } else if (amount >= 1000) {
       final t = amount ~/ 1000;

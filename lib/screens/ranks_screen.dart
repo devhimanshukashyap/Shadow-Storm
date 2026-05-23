@@ -1,22 +1,14 @@
 // lib/screens/ranks_screen.dart
 // ─────────────────────────────────────────────
-// RANKS SCREEN  — Shadow Storm  (v2)
+// RANKS SCREEN  — Shadow Storm  (v3)
+//
+// Fix: "A borderRadius can only be given on borders with uniform colors."
+//   → _PodiumSlot platform block now uses Border.all (uniform) instead of
+//     Border(top:, left:, right:) with different opacities.
 //
 // ONLY TWO LEADERBOARDS:
 //   1. Weekly Highest Winnings    (users ordered by totalEarnings DESC)
 //   2. Weekly Highest Withdrawals (users ordered by totalWithdrawals DESC)
-//
-// Player card shows ONLY:
-//   • Rank number
-//   • Profile image
-//   • Display name
-//   • Amount (winnings or withdrawals)
-//
-// Top 3 Podium: gold/silver/bronze, crown for #1
-//
-// ✅ Pushed via Navigator.push — Scaffold with its own back button
-// ✅ Same SSColors design language as HomeScreen / EventsScreen
-// ✅ No RP / points / badges / levels
 // ─────────────────────────────────────────────
 
 import 'dart:async';
@@ -25,10 +17,9 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-// ── Design tokens (mirror SSColors) ────────────────────────────────────────
+// ── Design tokens ───────────────────────────────────────────────────────────
 class _C {
   static const background      = Color(0xFF06040E);
-  // static const surface         = Color(0xFF0E0A1A);
   static const surfaceCard     = Color(0xFF130F22);
   static const surfaceElevated = Color(0xFF1A1430);
 
@@ -43,20 +34,15 @@ class _C {
   static const textMuted       = Color(0xFF5A4E80);
 
   static const gold            = Color(0xFFFFCC44);
-  // static const goldGlow        = Color(0x55FFCC44);
   static const silver          = Color(0xFFB8C7D4);
   static const bronze          = Color(0xFFCD7F32);
   static const live            = Color(0xFFFF4466);
-  // static const success         = Color(0xFF44FF99);
 
   static const border          = Color(0x337B3FE4);
-  // static const borderBright    = Color(0x667B3FE4);
 }
 
 // ─────────────────────────────────────────────
 // LEADERBOARD ENTRY MODEL
-// Read directly from users/ collection.
-// Fields used: name, photoUrl, totalEarnings, totalWithdrawals
 // ─────────────────────────────────────────────
 class _LbEntry {
   final String uid;
@@ -94,7 +80,6 @@ class _LbService {
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  /// Stream sorted by [field] descending, top 50 users.
   Stream<List<_LbEntry>> stream(String field) {
     return _db
         .collection('users')
@@ -104,7 +89,6 @@ class _LbService {
         .map((snap) => snap.docs.map(_LbEntry.fromDoc).toList());
   }
 
-  // Week label e.g. "Week 23 · 2025"
   String get weekLabel {
     final now  = DateTime.now();
     final jan1 = DateTime(now.year, 1, 1);
@@ -135,7 +119,7 @@ class _RanksScreenState extends State<RanksScreen>
   final _svc   = _LbService.instance;
   final String? _myUid = FirebaseAuth.instance.currentUser?.uid;
 
-  int _tabIndex = 0; // 0 = Winnings, 1 = Withdrawals
+  int _tabIndex = 0;
 
   late AnimationController _fadeCtrl;
   late AnimationController _glowCtrl;
@@ -188,9 +172,6 @@ class _RanksScreenState extends State<RanksScreen>
     return '${d.inDays}d $h:$m:$s';
   }
 
-  // ─────────────────────────────────────────
-  // BUILD
-  // ─────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final topPad = MediaQuery.of(context).padding.top;
@@ -234,7 +215,6 @@ class _RanksScreenState extends State<RanksScreen>
     );
   }
 
-  // ── HEADER ────────────────────────────────
   Widget _buildHeader() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
@@ -276,7 +256,6 @@ class _RanksScreenState extends State<RanksScreen>
           )),
         ]),
         const Spacer(),
-        // Reset countdown chip
         AnimatedBuilder(
           animation: _glow,
           builder: (_, child) => Container(
@@ -306,7 +285,6 @@ class _RanksScreenState extends State<RanksScreen>
     );
   }
 
-  // ── TAB BAR — two tabs only ───────────────
   Widget _buildTabBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -417,10 +395,9 @@ class _LeaderboardView extends StatelessWidget {
         return ListView.builder(
           physics: const BouncingScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-          itemCount: entries.length + 1, // +1 for podium at top
+          itemCount: entries.length + 1,
           itemBuilder: (ctx, i) {
             if (i == 0) {
-              // Podium: takes entries 0,1,2
               return Padding(
                 padding: const EdgeInsets.only(bottom: 20),
                 child: _Podium(
@@ -434,8 +411,7 @@ class _LeaderboardView extends StatelessWidget {
               );
             }
             final entry = entries[i - 1];
-            final rank  = i;       // 1-based rank
-            // Hide top 3 from list (they're in the podium)
+            final rank  = i;
             if (rank <= 3) return const SizedBox.shrink();
             return _PlayerCard(
               entry:        entry,
@@ -453,7 +429,7 @@ class _LeaderboardView extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// PODIUM — top 3 with animated glow
+// PODIUM
 // ─────────────────────────────────────────────
 class _Podium extends StatefulWidget {
   final List<_LbEntry>         entries;
@@ -491,11 +467,10 @@ class _PodiumState extends State<_Podium> with SingleTickerProviderStateMixin {
   }
   @override void dispose() { _ctrl.dispose(); super.dispose(); }
 
-  static const _platformHeights = [100.0, 130.0, 80.0]; // 2nd, 1st, 3rd
+  static const _platformHeights = [100.0, 130.0, 80.0];
 
   @override
   Widget build(BuildContext context) {
-    // Podium order: [2nd, 1st, 3rd]
     final _LbEntry? second = widget.entries.length > 1 ? widget.entries[1] : null;
     final _LbEntry? first  = widget.entries.isNotEmpty  ? widget.entries[0] : null;
     final _LbEntry? third  = widget.entries.length > 2  ? widget.entries[2] : null;
@@ -529,7 +504,6 @@ class _PodiumState extends State<_Podium> with SingleTickerProviderStateMixin {
             ],
           ),
           child: Stack(children: [
-            // Particle background
             SizedBox(
               height: 220,
               width: double.infinity,
@@ -595,21 +569,16 @@ class _PodiumSlot extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Crown / medal
-        Text(_crown, style: TextStyle(
-          fontSize: rank == 1 ? 28 : 22,
-        )),
+        Text(_crown, style: TextStyle(fontSize: rank == 1 ? 28 : 22)),
         const SizedBox(height: 6),
 
-        // Avatar
         if (entry != null) ...[
           Container(
             width: rank == 1 ? 64 : 52,
             height: rank == 1 ? 64 : 52,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              border: Border.all(color: _rankColor,
-                  width: rank == 1 ? 3 : 2),
+              border: Border.all(color: _rankColor, width: rank == 1 ? 3 : 2),
               boxShadow: [BoxShadow(
                 color: _rankColor.withValues(alpha: 0.45),
                 blurRadius: rank == 1 ? 16 : 10,
@@ -651,43 +620,55 @@ class _PodiumSlot extends StatelessWidget {
                 color: _C.textMuted, size: 24),
           ),
           const SizedBox(height: 6),
-          const Text('—', style: TextStyle(
-              color: _C.textMuted, fontSize: 12)),
+          const Text('—', style: TextStyle(color: _C.textMuted, fontSize: 12)),
           const SizedBox(height: 3),
-          const Text('—', style: TextStyle(
-              color: _C.textMuted, fontSize: 10)),
+          const Text('—', style: TextStyle(color: _C.textMuted, fontSize: 10)),
         ],
 
         const SizedBox(height: 8),
 
-        // Platform block
-        Container(
-          width: double.infinity,
-          height: platformH,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter, end: Alignment.bottomCenter,
-              colors: [
-                _rankColor.withValues(alpha: 0.22),
-                _rankColor.withValues(alpha: 0.06),
-              ],
-            ),
-            borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(10)),
-            border: Border(
-              top:   BorderSide(color: _rankColor.withValues(alpha: 0.55), width: 1.5),
-              left:  BorderSide(color: _rankColor.withValues(alpha: 0.2)),
-              right: BorderSide(color: _rankColor.withValues(alpha: 0.2)),
-            ),
+        // ── Platform block ───────────────────────────────────────────────
+        // FIX: Use Border.all (uniform color) so borderRadius is allowed.
+        // The top accent line is now a separate Container stacked on top.
+        ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+          child: Stack(
+            children: [
+              Container(
+                width: double.infinity,
+                height: platformH,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      _rankColor.withValues(alpha: 0.22),
+                      _rankColor.withValues(alpha: 0.06),
+                    ],
+                  ),
+                  border: Border.all(
+                    color: _rankColor.withValues(alpha: 0.25),
+                  ),
+                ),
+                child: Center(child: Text(
+                  '#$rank',
+                  style: TextStyle(
+                    color: _rankColor,
+                    fontSize: rank == 1 ? 26 : 20,
+                    fontWeight: FontWeight.w900,
+                  ),
+                )),
+              ),
+              // Top accent line
+              Positioned(
+                top: 0, left: 0, right: 0,
+                child: Container(
+                  height: 2,
+                  color: _rankColor.withValues(alpha: 0.7),
+                ),
+              ),
+            ],
           ),
-          child: Center(child: Text(
-            '#$rank',
-            style: TextStyle(
-              color: _rankColor,
-              fontSize: rank == 1 ? 26 : 20,
-              fontWeight: FontWeight.w900,
-            ),
-          )),
         ),
       ],
     );
@@ -695,8 +676,7 @@ class _PodiumSlot extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// PLAYER CARD  (rank 4+)
-// Shows ONLY: rank number, avatar, display name, amount
+// PLAYER CARD (rank 4+)
 // ─────────────────────────────────────────────
 class _PlayerCard extends StatefulWidget {
   final _LbEntry  entry;
@@ -761,7 +741,6 @@ class _PlayerCardState extends State<_PlayerCard>
           ),
         ),
         child: Row(children: [
-          // Rank
           SizedBox(
             width: 36,
             child: Text('#${widget.rank}', textAlign: TextAlign.center,
@@ -771,8 +750,6 @@ class _PlayerCardState extends State<_PlayerCard>
               )),
           ),
           const SizedBox(width: 10),
-
-          // Avatar
           SizedBox(
             width: 42, height: 42,
             child: ClipOval(child: Container(
@@ -788,8 +765,6 @@ class _PlayerCardState extends State<_PlayerCard>
             )),
           ),
           const SizedBox(width: 12),
-
-          // Name only
           Expanded(child: Row(children: [
             Flexible(child: Text(widget.entry.name,
               style: const TextStyle(
@@ -814,8 +789,6 @@ class _PlayerCardState extends State<_PlayerCard>
               ),
             ],
           ])),
-
-          // Amount
           Text(widget.formatAmount(widget.value), style: const TextStyle(
             color: _C.gold, fontSize: 14,
             fontWeight: FontWeight.w800,
@@ -827,7 +800,7 @@ class _PlayerCardState extends State<_PlayerCard>
 }
 
 // ─────────────────────────────────────────────
-// AVATAR WIDGET
+// AVATAR
 // ─────────────────────────────────────────────
 class _Avatar extends StatelessWidget {
   final String url;
@@ -866,7 +839,7 @@ class _Fallback extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// PAINTER — floating particles behind podium
+// PARTICLE PAINTER
 // ─────────────────────────────────────────────
 class _PodiumParticlePainter extends CustomPainter {
   final double progress;
@@ -930,8 +903,7 @@ class _ErrorState extends StatelessWidget {
     return Center(child: Padding(
       padding: const EdgeInsets.all(24),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.error_outline_rounded,
-            color: _C.live, size: 40),
+        const Icon(Icons.error_outline_rounded, color: _C.live, size: 40),
         const SizedBox(height: 12),
         Text(message, style: const TextStyle(
           color: _C.textSecondary, fontSize: 13), textAlign: TextAlign.center),
@@ -975,21 +947,3 @@ class _EmptyState extends StatelessWidget {
 // Collection: users
 //   Fields: totalEarnings DESC    (for Winnings leaderboard)
 //   Fields: totalWithdrawals DESC (for Withdrawals leaderboard)
-//
-// Create via Firebase Console → Firestore → Indexes → Single Field
-// or paste into firestore.indexes.json:
-// {
-//   "indexes": [],
-//   "fieldOverrides": [
-//     {
-//       "collectionGroup": "users",
-//       "fieldPath": "totalEarnings",
-//       "indexes": [{ "order": "DESCENDING", "queryScope": "COLLECTION" }]
-//     },
-//     {
-//       "collectionGroup": "users",
-//       "fieldPath": "totalWithdrawals",
-//       "indexes": [{ "order": "DESCENDING", "queryScope": "COLLECTION" }]
-//     }
-//   ]
-// }

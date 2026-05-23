@@ -27,23 +27,23 @@ import 'tournament_details_screen.dart';
 // DESIGN TOKENS  (mirrors Shadow Storm palette)
 // ─────────────────────────────────────────────
 class _C {
-  static const background      = Color(0xFF06040E);
-  static const surfaceCard     = Color(0xFF130F22);
+  static const background = Color(0xFF06040E);
+  static const surfaceCard = Color(0xFF130F22);
   static const surfaceElevated = Color(0xFF1A1430);
 
-  static const purple          = Color(0xFF9D55FF);
-  static const purpleLight     = Color(0xFFB07EF8);
+  static const purple = Color(0xFF9D55FF);
+  static const purpleLight = Color(0xFFB07EF8);
   static const purpleGlowFaint = Color(0x229D55FF);
 
-  static const textPrimary     = Color(0xFFEDE0FF);
-  static const textSecondary   = Color(0xFF9B8DC0);
-  static const textMuted       = Color(0xFF5A4E80);
+  static const textPrimary = Color(0xFFEDE0FF);
+  static const textSecondary = Color(0xFF9B8DC0);
+  static const textMuted = Color(0xFF5A4E80);
 
-  static const gold            = Color(0xFFFFCC44);
-  static const live            = Color(0xFFFF4466);
-  static const liveGlow        = Color(0x55FF4466);
-  static const success         = Color(0xFF44FF99);
-  static const border          = Color(0x337B3FE4);
+  static const gold = Color(0xFFFFCC44);
+  static const live = Color(0xFFFF4466);
+  static const liveGlow = Color(0x55FF4466);
+  static const success = Color(0xFF44FF99);
+  static const border = Color(0x337B3FE4);
 }
 
 // ─────────────────────────────────────────────
@@ -51,12 +51,13 @@ class _C {
 // Firestore: tournaments/{id}/participants/{uid}
 // ─────────────────────────────────────────────
 class ParticipantData {
-  final String  userId;
+  final String userId;
   final DateTime? joinedAt;
-  final int?    placement;
-  final int?    kills;
+  final int? placement;
+  final int? kills;
   final double? winnings;
-  final String  status; // 'registered' | 'playing' | 'completed' | 'disqualified'
+  final String
+  status; // 'registered' | 'playing' | 'completed' | 'disqualified'
 
   const ParticipantData({
     required this.userId,
@@ -70,12 +71,12 @@ class ParticipantData {
   factory ParticipantData.fromDoc(DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>? ?? {};
     return ParticipantData(
-      userId:    d['userId']    as String? ?? doc.id,
-      joinedAt:  (d['joinedAt'] as Timestamp?)?.toDate(),
+      userId: d['userId'] as String? ?? doc.id,
+      joinedAt: (d['joinedAt'] as Timestamp?)?.toDate(),
       placement: (d['placement'] as num?)?.toInt(),
-      kills:     (d['kills']     as num?)?.toInt(),
-      winnings:  (d['winnings']  as num?)?.toDouble(),
-      status:    d['status']    as String? ?? 'registered',
+      kills: (d['kills'] as num?)?.toInt(),
+      winnings: (d['winnings'] as num?)?.toDouble(),
+      status: d['status'] as String? ?? 'registered',
     );
   }
 }
@@ -92,17 +93,16 @@ class EventsScreen extends StatefulWidget {
 
 class _EventsScreenState extends State<EventsScreen>
     with TickerProviderStateMixin {
-
   late TabController _tabCtrl;
   late AnimationController _fadeCtrl;
-  late Animation<double>   _fadeIn;
+  late Animation<double> _fadeIn;
   late AnimationController _pulseCtrl;
-  late Animation<double>   _pulse;
+  late Animation<double> _pulse;
 
-  final TournamentService   _service = TournamentService.instance;
-  final FirebaseFirestore   _db      = FirebaseFirestore.instance;
+  final TournamentService _service = TournamentService.instance;
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  User?   get _user   => FirebaseAuth.instance.currentUser;
+  User? get _user => FirebaseAuth.instance.currentUser;
   String? get _userId => _user?.uid;
 
   // Cache of participant data keyed by tournamentId
@@ -114,12 +114,14 @@ class _EventsScreenState extends State<EventsScreen>
     _tabCtrl = TabController(length: 3, vsync: this);
 
     _fadeCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 600),
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
     )..forward();
     _fadeIn = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOutCubic);
 
     _pulseCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 2000),
+      vsync: this,
+      duration: const Duration(milliseconds: 2000),
     )..repeat(reverse: true);
     _pulse = CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut);
   }
@@ -180,34 +182,32 @@ class _EventsScreenState extends State<EventsScreen>
         opacity: _fadeIn,
         child: NestedScrollView(
           physics: const BouncingScrollPhysics(),
-          headerSliverBuilder: (_, _) => [
-            _buildAppBar(),
-          ],
+          headerSliverBuilder: (_, _) => [_buildAppBar()],
           body: TabBarView(
             controller: _tabCtrl,
             children: [
               _EventsTab(
-                userId:         _userId,
-                statusFilter:   TournamentStatus.upcoming,
-                service:        _service,
-                pulse:          _pulse,
-                onTap:          _openDetails,
+                userId: _userId,
+                statusFilter: TournamentStatus.upcoming,
+                service: _service,
+                pulse: _pulse,
+                onTap: _openDetails,
                 getParticipant: _getParticipant,
               ),
               _EventsTab(
-                userId:         _userId,
-                statusFilter:   TournamentStatus.live,
-                service:        _service,
-                pulse:          _pulse,
-                onTap:          _openDetails,
+                userId: _userId,
+                statusFilter: TournamentStatus.live,
+                service: _service,
+                pulse: _pulse,
+                onTap: _openDetails,
                 getParticipant: _getParticipant,
               ),
               _EventsTab(
-                userId:         _userId,
-                statusFilter:   TournamentStatus.completed,
-                service:        _service,
-                pulse:          _pulse,
-                onTap:          _openDetails,
+                userId: _userId,
+                statusFilter: TournamentStatus.completed,
+                service: _service,
+                pulse: _pulse,
+                onTap: _openDetails,
                 getParticipant: _getParticipant,
               ),
             ],
@@ -233,35 +233,38 @@ class _EventsScreenState extends State<EventsScreen>
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Row(children: [
-              Container(
-                width: 3, height: 18,
-                decoration: BoxDecoration(
-                  color: _C.purple,
-                  borderRadius: BorderRadius.circular(2),
+            Row(
+              children: [
+                Container(
+                  width: 3,
+                  height: 18,
+                  decoration: BoxDecoration(
+                    color: _C.purple,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              const Text(
-                'MY EVENTS',
-                style: TextStyle(
-                  color: _C.textPrimary,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 1.5,
+                const SizedBox(width: 8),
+                const Text(
+                  'MY EVENTS',
+                  style: TextStyle(
+                    color: _C.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.5,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              const Text(
-                'DASHBOARD',
-                style: TextStyle(
-                  color: _C.purple,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 1.5,
+                const SizedBox(width: 8),
+                const Text(
+                  'DASHBOARD',
+                  style: TextStyle(
+                    color: _C.purple,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.5,
+                  ),
                 ),
-              ),
-            ]),
+              ],
+            ),
             const SizedBox(height: 2),
             Text(
               _user?.displayName ?? 'Player',
@@ -286,9 +289,24 @@ class _EventsScreenState extends State<EventsScreen>
               indicator: const BoxDecoration(),
               dividerColor: Colors.transparent,
               tabs: [
-                _EventTab(label: 'UPCOMING',  icon: Icons.schedule_rounded,             color: _C.gold,    tabCtrl: _tabCtrl),
-                _EventTab(label: 'ONGOING',   icon: Icons.radio_button_checked,         color: _C.live,    tabCtrl: _tabCtrl),
-                _EventTab(label: 'COMPLETED', icon: Icons.check_circle_outline_rounded, color: _C.success, tabCtrl: _tabCtrl),
+                _EventTab(
+                  label: 'UPCOMING',
+                  icon: Icons.schedule_rounded,
+                  color: _C.gold,
+                  tabCtrl: _tabCtrl,
+                ),
+                _EventTab(
+                  label: 'ONGOING',
+                  icon: Icons.radio_button_checked,
+                  color: _C.live,
+                  tabCtrl: _tabCtrl,
+                ),
+                _EventTab(
+                  label: 'COMPLETED',
+                  icon: Icons.check_circle_outline_rounded,
+                  color: _C.success,
+                  tabCtrl: _tabCtrl,
+                ),
               ],
             ),
           ],
@@ -306,9 +324,9 @@ class _EventsScreenState extends State<EventsScreen>
 // wraps children in a DefaultTabController.
 // ─────────────────────────────────────────────
 class _EventTab extends StatelessWidget {
-  final String        label;
-  final IconData      icon;
-  final Color         color;
+  final String label;
+  final IconData icon;
+  final Color color;
   final TabController tabCtrl;
 
   const _EventTab({
@@ -321,20 +339,15 @@ class _EventTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Tab(
-      child: _TabChip(
-        label:   label,
-        icon:    icon,
-        color:   color,
-        tabCtrl: tabCtrl,
-      ),
+      child: _TabChip(label: label, icon: icon, color: color, tabCtrl: tabCtrl),
     );
   }
 }
 
 class _TabChip extends StatelessWidget {
-  final String        label;
-  final IconData      icon;
-  final Color         color;
+  final String label;
+  final IconData icon;
+  final Color color;
   final TabController tabCtrl;
 
   const _TabChip({
@@ -347,7 +360,7 @@ class _TabChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const tabs = ['UPCOMING', 'ONGOING', 'COMPLETED'];
-    final idx  = tabs.indexOf(label);
+    final idx = tabs.indexOf(label);
 
     return AnimatedBuilder(
       animation: tabCtrl,
@@ -390,10 +403,10 @@ class _TabChip extends StatelessWidget {
 // EVENTS TAB  (one per status)
 // ─────────────────────────────────────────────
 class _EventsTab extends StatelessWidget {
-  final String?              userId;
-  final TournamentStatus     statusFilter;
-  final TournamentService    service;
-  final Animation<double>    pulse;
+  final String? userId;
+  final TournamentStatus statusFilter;
+  final TournamentService service;
+  final Animation<double> pulse;
   final void Function(TournamentModel) onTap;
   final Future<ParticipantData?> Function(String) getParticipant;
 
@@ -432,10 +445,8 @@ class _EventsTab extends StatelessWidget {
           }
 
           // Filter by status
-          final all      = snap.data ?? [];
-          final filtered = all
-              .where((t) => t.status == statusFilter)
-              .toList();
+          final all = snap.data ?? [];
+          final filtered = all.where((t) => t.status == statusFilter).toList();
 
           if (filtered.isEmpty) {
             return _EmptyState(status: statusFilter);
@@ -443,18 +454,19 @@ class _EventsTab extends StatelessWidget {
 
           return ListView.builder(
             physics: const BouncingScrollPhysics(
-                parent: AlwaysScrollableScrollPhysics()),
+              parent: AlwaysScrollableScrollPhysics(),
+            ),
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
             itemCount: filtered.length,
             itemBuilder: (ctx, i) {
               final tournament = filtered[i];
               return _EventCardWrapper(
-                tournament:     tournament,
-                statusFilter:   statusFilter,
-                pulse:          pulse,
-                onTap:          onTap,
+                tournament: tournament,
+                statusFilter: statusFilter,
+                pulse: pulse,
+                onTap: onTap,
                 getParticipant: getParticipant,
-                animIndex:      i,
+                animIndex: i,
               );
             },
           );
@@ -469,7 +481,7 @@ class _EventsTab extends StatelessWidget {
 // Fetches participant data then renders correct card type
 // ─────────────────────────────────────────────
 class _EventCardWrapper extends StatefulWidget {
-  final TournamentModel  tournament;
+  final TournamentModel tournament;
   final TournamentStatus statusFilter;
   final Animation<double> pulse;
   final void Function(TournamentModel) onTap;
@@ -492,8 +504,8 @@ class _EventCardWrapper extends StatefulWidget {
 class _EventCardWrapperState extends State<_EventCardWrapper>
     with SingleTickerProviderStateMixin {
   late AnimationController _slideCtrl;
-  late Animation<Offset>   _slide;
-  late Animation<double>   _fade;
+  late Animation<Offset> _slide;
+  late Animation<double> _fade;
 
   ParticipantData? _participant;
   bool _loadingP = false;
@@ -502,9 +514,13 @@ class _EventCardWrapperState extends State<_EventCardWrapper>
   void initState() {
     super.initState();
     _slideCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 450));
-    _slide = Tween<Offset>(begin: const Offset(0, 0.12), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOutCubic));
+      vsync: this,
+      duration: const Duration(milliseconds: 450),
+    );
+    _slide = Tween<Offset>(
+      begin: const Offset(0, 0.12),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOutCubic));
     _fade = CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOut);
 
     Future.delayed(Duration(milliseconds: 60 * widget.animIndex), () {
@@ -522,7 +538,12 @@ class _EventCardWrapperState extends State<_EventCardWrapper>
 
   Future<void> _loadParticipant() async {
     final p = await widget.getParticipant(widget.tournament.id);
-    if (mounted) setState(() { _participant = p; _loadingP = false; });
+    if (mounted) {
+      setState(() {
+        _participant = p;
+        _loadingP = false;
+      });
+    }
   }
 
   @override
@@ -541,24 +562,31 @@ class _EventCardWrapperState extends State<_EventCardWrapper>
 
   Widget _buildCard() {
     switch (widget.statusFilter) {
+      //error on switch
       case TournamentStatus.upcoming:
         return UpcomingEventCard(
-          tournament:  widget.tournament,
+          tournament: widget.tournament,
           participant: _participant,
-          onTap:       widget.onTap,
+          onTap: widget.onTap,
         );
       case TournamentStatus.live:
         return OngoingEventCard(
-          tournament:  widget.tournament,
+          tournament: widget.tournament,
           participant: _participant,
-          pulse:       widget.pulse,
-          onTap:       widget.onTap,
+          pulse: widget.pulse,
+          onTap: widget.onTap,
         );
       case TournamentStatus.completed:
         return CompletedEventCard(
-          tournament:  widget.tournament,
+          tournament: widget.tournament,
           participant: _participant,
-          onTap:       widget.onTap,
+          onTap: widget.onTap,
+        );
+      case TournamentStatus.cancelled:
+        return CompletedEventCard(
+          tournament: widget.tournament,
+          participant: _participant,
+          onTap: widget.onTap,
         );
     }
   }
@@ -585,8 +613,8 @@ class UpcomingEventCard extends StatefulWidget {
 
 class _UpcomingEventCardState extends State<UpcomingEventCard> {
   Timer? _timer;
-  Duration _matchCountdown   = Duration.zero;
-  Duration _revealCountdown  = Duration.zero;
+  Duration _matchCountdown = Duration.zero;
+  Duration _revealCountdown = Duration.zero;
   bool _pressed = false;
 
   @override
@@ -613,13 +641,13 @@ class _UpcomingEventCardState extends State<UpcomingEventCard> {
     final startTime = widget.tournament.startTime;
     if (startTime == null) return;
 
-    final matchDiff  = startTime.difference(now);
+    final matchDiff = startTime.difference(now);
     // Room reveal is 30 min before match
     final revealTime = startTime.subtract(const Duration(minutes: 30));
     final revealDiff = revealTime.difference(now);
 
     setState(() {
-      _matchCountdown  = matchDiff.isNegative ? Duration.zero : matchDiff;
+      _matchCountdown = matchDiff.isNegative ? Duration.zero : matchDiff;
       _revealCountdown = revealDiff.isNegative ? Duration.zero : revealDiff;
     });
   }
@@ -627,15 +655,16 @@ class _UpcomingEventCardState extends State<UpcomingEventCard> {
   bool get _roomRevealed =>
       widget.tournament.startTime != null &&
       DateTime.now().isAfter(
-          widget.tournament.startTime!.subtract(const Duration(minutes: 30)));
+        widget.tournament.startTime!.subtract(const Duration(minutes: 30)),
+      );
 
   @override
   Widget build(BuildContext context) {
     final t = widget.tournament;
     return GestureDetector(
-      onTap:       () => widget.onTap(t),
-      onTapDown:   (_) => setState(() => _pressed = true),
-      onTapUp:     (_) => setState(() => _pressed = false),
+      onTap: () => widget.onTap(t),
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
       onTapCancel: () => setState(() => _pressed = false),
       child: AnimatedScale(
         scale: _pressed ? 0.985 : 1.0,
@@ -644,19 +673,22 @@ class _UpcomingEventCardState extends State<UpcomingEventCard> {
           decoration: BoxDecoration(
             color: _C.surfaceCard,
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: _C.gold.withValues(alpha: 0.25), width: 1),
+            border: Border.all(
+              color: _C.gold.withValues(alpha: 0.25),
+              width: 1,
+            ),
             boxShadow: [
-              BoxShadow(
-                color: _C.gold.withValues(alpha: 0.04),
-                blurRadius: 16,
-              ),
+              BoxShadow(color: _C.gold.withValues(alpha: 0.04), blurRadius: 16),
             ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // ── Banner ────────────────────────
-              _BannerImage(bannerUrl: t.bannerUrl, tournamentType: t.tournamentType),
+              _BannerImage(
+                bannerUrl: t.bannerUrl,
+                tournamentType: t.tournamentType,
+              ),
 
               // ── Body ──────────────────────────
               Padding(
@@ -665,72 +697,91 @@ class _UpcomingEventCardState extends State<UpcomingEventCard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     // Title row
-                    Row(children: [
-                      Expanded(
-                        child: Text(t.title, style: const TextStyle(
-                          color: _C.textPrimary, fontSize: 16,
-                          fontWeight: FontWeight.w800, height: 1.2,
-                        ), maxLines: 1, overflow: TextOverflow.ellipsis),
-                      ),
-                      _JoinedPill(),
-                    ]),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            t.title,
+                            style: const TextStyle(
+                              color: _C.textPrimary,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              height: 1.2,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        _JoinedPill(),
+                      ],
+                    ),
                     const SizedBox(height: 2),
-                    Text(t.subtitle, style: const TextStyle(
-                      color: _C.textSecondary, fontSize: 12,
-                    ), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    Text(
+                      t.subtitle,
+                      style: const TextStyle(
+                        color: _C.textSecondary,
+                        fontSize: 12,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
 
                     const SizedBox(height: 14),
 
                     // Stats row
-                    Row(children: [
-                      _MiniStat(
-                        icon: Icons.emoji_events_rounded,
-                        label: 'PRIZE',
-                        value: t.prizePoolDisplay,
-                        color: _C.gold,
-                      ),
-                      const SizedBox(width: 12),
-                      _MiniStat(
-                        icon: Icons.payments_rounded,
-                        label: 'ENTRY',
-                        value: t.entryFeeDisplay,
-                        color: t.entryFee > 0 ? _C.textSecondary : _C.success,
-                      ),
-                      const SizedBox(width: 12),
-                      _MiniStat(
-                        icon: Icons.people_rounded,
-                        label: 'SLOTS',
-                        value: '${t.joinedPlayers}/${t.maxPlayers}',
-                        color: _C.purpleLight,
-                      ),
-                    ]),
+                    Row(
+                      children: [
+                        _MiniStat(
+                          icon: Icons.emoji_events_rounded,
+                          label: 'PRIZE',
+                          value: t.prizePoolDisplay,
+                          color: _C.gold,
+                        ),
+                        const SizedBox(width: 12),
+                        _MiniStat(
+                          icon: Icons.payments_rounded,
+                          label: 'ENTRY',
+                          value: t.entryFeeDisplay,
+                          color: t.entryFee > 0 ? _C.textSecondary : _C.success,
+                        ),
+                        const SizedBox(width: 12),
+                        _MiniStat(
+                          icon: Icons.people_rounded,
+                          label: 'SLOTS',
+                          value: '${t.joinedPlayers}/${t.maxPlayers}',
+                          color: _C.purpleLight,
+                        ),
+                      ],
+                    ),
 
                     const SizedBox(height: 14),
                     Container(height: 1, color: _C.border),
                     const SizedBox(height: 14),
 
                     // Countdown row
-                    Row(children: [
-                      Expanded(
-                        child: _CountdownBlock(
-                          label: 'MATCH STARTS IN',
-                          duration: _matchCountdown,
-                          color: _C.gold,
-                          icon: Icons.schedule_rounded,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _CountdownBlock(
+                            label: 'MATCH STARTS IN',
+                            duration: _matchCountdown,
+                            color: _C.gold,
+                            icon: Icons.schedule_rounded,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _roomRevealed
-                            ? _RoomReadyBlock()
-                            : _CountdownBlock(
-                                label: 'ROOM REVEAL IN',
-                                duration: _revealCountdown,
-                                color: _C.purple,
-                                icon: Icons.lock_clock_rounded,
-                              ),
-                      ),
-                    ]),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _roomRevealed
+                              ? _RoomReadyBlock()
+                              : _CountdownBlock(
+                                  label: 'ROOM REVEAL IN',
+                                  duration: _revealCountdown,
+                                  color: _C.purple,
+                                  icon: Icons.lock_clock_rounded,
+                                ),
+                        ),
+                      ],
+                    ),
 
                     // Room reveal state
                     if (_roomRevealed) ...[
@@ -762,7 +813,7 @@ class _UpcomingEventCardState extends State<UpcomingEventCard> {
 // ── ONGOING EVENT CARD ────────────────────────
 // ═════════════════════════════════════════════
 class OngoingEventCard extends StatefulWidget {
-  final TournamentModel  tournament;
+  final TournamentModel tournament;
   final ParticipantData? participant;
   final Animation<double> pulse;
   final void Function(TournamentModel) onTap;
@@ -789,28 +840,35 @@ class _OngoingEventCardState extends State<OngoingEventCard> {
 
   void _copyToClipboard(String text, String label) {
     Clipboard.setData(ClipboardData(text: text));
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Row(children: [
-        const Icon(Icons.check_circle_rounded, color: _C.success, size: 16),
-        const SizedBox(width: 8),
-        Text('$label copied!', style: const TextStyle(color: _C.textPrimary)),
-      ]),
-      backgroundColor: _C.surfaceElevated,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(10),
-        side: BorderSide(color: _C.success.withValues(alpha: 0.4)),
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle_rounded, color: _C.success, size: 16),
+            const SizedBox(width: 8),
+            Text(
+              '$label copied!',
+              style: const TextStyle(color: _C.textPrimary),
+            ),
+          ],
+        ),
+        backgroundColor: _C.surfaceElevated,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(color: _C.success.withValues(alpha: 0.4)),
+        ),
       ),
-    ));
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final t = widget.tournament;
     return GestureDetector(
-      onTap:       () => widget.onTap(t),
-      onTapDown:   (_) => setState(() => _pressed = true),
-      onTapUp:     (_) => setState(() => _pressed = false),
+      onTap: () => widget.onTap(t),
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
       onTapCancel: () => setState(() => _pressed = false),
       child: AnimatedScale(
         scale: _pressed ? 0.985 : 1.0,
@@ -823,13 +881,15 @@ class _OngoingEventCardState extends State<OngoingEventCard> {
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color: _C.live.withValues(
-                    alpha: 0.25 + 0.15 * widget.pulse.value),
+                  alpha: 0.25 + 0.15 * widget.pulse.value,
+                ),
                 width: 1.5,
               ),
               boxShadow: [
                 BoxShadow(
                   color: _C.live.withValues(
-                      alpha: 0.05 + 0.04 * widget.pulse.value),
+                    alpha: 0.05 + 0.04 * widget.pulse.value,
+                  ),
                   blurRadius: 20,
                 ),
               ],
@@ -841,25 +901,37 @@ class _OngoingEventCardState extends State<OngoingEventCard> {
             children: [
               // ── Live header strip ─────────────
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: _C.live.withValues(alpha: 0.08),
                   borderRadius: const BorderRadius.only(
                     topLeft: Radius.circular(20),
                     topRight: Radius.circular(20),
                   ),
-                  border: Border(bottom: BorderSide(color: _C.live.withValues(alpha: 0.2))),
+                  border: Border(
+                    bottom: BorderSide(color: _C.live.withValues(alpha: 0.2)),
+                  ),
                 ),
-                child: Row(children: [
-                  _LiveDot(),
-                  const SizedBox(width: 8),
-                  const Text('LIVE NOW', style: TextStyle(
-                    color: _C.live, fontSize: 11,
-                    fontWeight: FontWeight.w800, letterSpacing: 1.2,
-                  )),
-                  const Spacer(),
-                  _JoinedPill(),
-                ]),
+                child: Row(
+                  children: [
+                    _LiveDot(),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'LIVE NOW',
+                      style: TextStyle(
+                        color: _C.live,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    const Spacer(),
+                    _JoinedPill(),
+                  ],
+                ),
               ),
 
               Padding(
@@ -868,33 +940,48 @@ class _OngoingEventCardState extends State<OngoingEventCard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     // Tournament title
-                    Text(t.title, style: const TextStyle(
-                      color: _C.textPrimary, fontSize: 17,
-                      fontWeight: FontWeight.w800, height: 1.2,
-                    ), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    Text(
+                      t.title,
+                      style: const TextStyle(
+                        color: _C.textPrimary,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        height: 1.2,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     const SizedBox(height: 2),
-                    Text(t.subtitle, style: const TextStyle(
-                      color: _C.textSecondary, fontSize: 12,
-                    ), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    Text(
+                      t.subtitle,
+                      style: const TextStyle(
+                        color: _C.textSecondary,
+                        fontSize: 12,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
 
                     const SizedBox(height: 14),
 
                     // Player count + prize
-                    Row(children: [
-                      _MiniStat(
-                        icon: Icons.people_rounded,
-                        label: 'IN MATCH',
-                        value: '${t.joinedPlayers}/${t.maxPlayers}',
-                        color: _C.purpleLight,
-                      ),
-                      const SizedBox(width: 12),
-                      _MiniStat(
-                        icon: Icons.emoji_events_rounded,
-                        label: 'PRIZE',
-                        value: t.prizePoolDisplay,
-                        color: _C.gold,
-                      ),
-                    ]),
+                    Row(
+                      children: [
+                        _MiniStat(
+                          icon: Icons.people_rounded,
+                          label: 'IN MATCH',
+                          value: '${t.joinedPlayers}/${t.maxPlayers}',
+                          color: _C.purpleLight,
+                        ),
+                        const SizedBox(width: 12),
+                        _MiniStat(
+                          icon: Icons.emoji_events_rounded,
+                          label: 'PRIZE',
+                          value: t.prizePoolDisplay,
+                          color: _C.gold,
+                        ),
+                      ],
+                    ),
 
                     const SizedBox(height: 14),
                     Container(height: 1, color: _C.border),
@@ -909,17 +996,19 @@ class _OngoingEventCardState extends State<OngoingEventCard> {
                     const SizedBox(height: 14),
 
                     // Action buttons
-                    Row(children: [
-                      Expanded(
-                        child: _QuickAccessButton(
-                          label: 'TOURNAMENT DETAILS',
-                          icon: Icons.info_outline_rounded,
-                          onTap: () => widget.onTap(t),
-                          color: _C.purple,
-                          outline: true,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _QuickAccessButton(
+                            label: 'TOURNAMENT DETAILS',
+                            icon: Icons.info_outline_rounded,
+                            onTap: () => widget.onTap(t),
+                            color: _C.purple,
+                            outline: true,
+                          ),
                         ),
-                      ),
-                    ]),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -935,7 +1024,7 @@ class _OngoingEventCardState extends State<OngoingEventCard> {
 // ── COMPLETED EVENT CARD ──────────────────────
 // ═════════════════════════════════════════════
 class CompletedEventCard extends StatefulWidget {
-  final TournamentModel  tournament;
+  final TournamentModel tournament;
   final ParticipantData? participant;
   final void Function(TournamentModel) onTap;
 
@@ -978,9 +1067,9 @@ class _CompletedEventCardState extends State<CompletedEventCard> {
     final color = _resultColor;
 
     return GestureDetector(
-      onTap:       () => widget.onTap(t),
-      onTapDown:   (_) => setState(() => _pressed = true),
-      onTapUp:     (_) => setState(() => _pressed = false),
+      onTap: () => widget.onTap(t),
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
       onTapCancel: () => setState(() => _pressed = false),
       child: AnimatedScale(
         scale: _pressed ? 0.985 : 1.0,
@@ -991,10 +1080,7 @@ class _CompletedEventCardState extends State<CompletedEventCard> {
             borderRadius: BorderRadius.circular(20),
             border: Border.all(color: color.withValues(alpha: 0.2)),
             boxShadow: [
-              BoxShadow(
-                color: color.withValues(alpha: 0.04),
-                blurRadius: 16,
-              ),
+              BoxShadow(color: color.withValues(alpha: 0.04), blurRadius: 16),
             ],
           ),
           child: Column(
@@ -1002,33 +1088,47 @@ class _CompletedEventCardState extends State<CompletedEventCard> {
             children: [
               // ── Completed strip ───────────────
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: _C.surfaceElevated,
                   borderRadius: const BorderRadius.only(
-                    topLeft:  Radius.circular(20),
+                    topLeft: Radius.circular(20),
                     topRight: Radius.circular(20),
                   ),
                   border: Border(bottom: BorderSide(color: _C.border)),
                 ),
-                child: Row(children: [
-                  const Icon(Icons.check_circle_outline_rounded,
-                      color: _C.textMuted, size: 13),
-                  const SizedBox(width: 6),
-                  const Text('COMPLETED', style: TextStyle(
-                    color: _C.textMuted, fontSize: 10,
-                    fontWeight: FontWeight.w800, letterSpacing: 1.2,
-                  )),
-                  const Spacer(),
-                  if (t.startTime != null)
-                    Text(
-                      _formatDate(t.startTime!),
-                      style: const TextStyle(
-                        color: _C.textMuted, fontSize: 10,
-                        fontWeight: FontWeight.w500,
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.check_circle_outline_rounded,
+                      color: _C.textMuted,
+                      size: 13,
+                    ),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'COMPLETED',
+                      style: TextStyle(
+                        color: _C.textMuted,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.2,
                       ),
                     ),
-                ]),
+                    const Spacer(),
+                    if (t.startTime != null)
+                      Text(
+                        _formatDate(t.startTime!),
+                        style: const TextStyle(
+                          color: _C.textMuted,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                  ],
+                ),
               ),
 
               Padding(
@@ -1036,102 +1136,155 @@ class _CompletedEventCardState extends State<CompletedEventCard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(t.title, style: const TextStyle(
-                              color: _C.textPrimary, fontSize: 16,
-                              fontWeight: FontWeight.w800, height: 1.2,
-                            ), maxLines: 1, overflow: TextOverflow.ellipsis),
-                            const SizedBox(height: 2),
-                            Text(t.modeDisplay, style: const TextStyle(
-                              color: _C.textSecondary, fontSize: 12,
-                            )),
-                          ],
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                t.title,
+                                style: const TextStyle(
+                                  color: _C.textPrimary,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                  height: 1.2,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                t.modeDisplay,
+                                style: const TextStyle(
+                                  color: _C.textSecondary,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      // Placement badge
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: color.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: color.withValues(alpha: 0.35)),
+                        const SizedBox(width: 12),
+                        // Placement badge
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: color.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: color.withValues(alpha: 0.35),
+                            ),
+                          ),
+                          child: Text(
+                            _resultLabel,
+                            style: TextStyle(
+                              color: color,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
                         ),
-                        child: Text(_resultLabel, style: TextStyle(
-                          color: color, fontSize: 13, fontWeight: FontWeight.w900,
-                        )),
-                      ),
-                    ]),
+                      ],
+                    ),
 
                     const SizedBox(height: 16),
                     Container(height: 1, color: _C.border),
                     const SizedBox(height: 16),
 
                     // Result summary row
-                    Row(children: [
-                      _ResultStat(
-                        icon: Icons.leaderboard_rounded,
-                        label: 'PLACEMENT',
-                        value: p?.placement != null ? '#${p!.placement}' : '—',
-                        color: color,
-                      ),
-                      _VertDivider(),
-                      _ResultStat(
-                        icon: Icons.sports_kabaddi_rounded,
-                        label: 'KILLS',
-                        value: p?.kills?.toString() ?? '—',
-                        color: _C.live,
-                      ),
-                      _VertDivider(),
-                      _ResultStat(
-                        icon: Icons.account_balance_wallet_rounded,
-                        label: 'WINNINGS',
-                        value: p?.winnings != null
-                            ? '₹${p!.winnings!.toInt()}'
-                            : '—',
-                        color: p?.winnings != null && p!.winnings! > 0
-                            ? _C.success
-                            : _C.textMuted,
-                      ),
-                    ]),
+                    Row(
+                      children: [
+                        _ResultStat(
+                          icon: Icons.leaderboard_rounded,
+                          label: 'PLACEMENT',
+                          value: p?.placement != null
+                              ? '#${p!.placement}'
+                              : '—',
+                          color: color,
+                        ),
+                        _VertDivider(),
+                        _ResultStat(
+                          icon: Icons.sports_kabaddi_rounded,
+                          label: 'KILLS',
+                          value: p?.kills?.toString() ?? '—',
+                          color: _C.live,
+                        ),
+                        _VertDivider(),
+                        _ResultStat(
+                          icon: Icons.account_balance_wallet_rounded,
+                          label: 'WINNINGS',
+                          value: p?.winnings != null
+                              ? '₹${p!.winnings!.toInt()}'
+                              : '—',
+                          color: p?.winnings != null && p!.winnings! > 0
+                              ? _C.success
+                              : _C.textMuted,
+                        ),
+                      ],
+                    ),
 
                     // Winnings earned banner
                     if (p?.winnings != null && p!.winnings! > 0) ...[
                       const SizedBox(height: 14),
                       Container(
                         width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(colors: [
-                            _C.success.withValues(alpha: 0.12),
-                            _C.success.withValues(alpha: 0.04),
-                          ]),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: _C.success.withValues(alpha: 0.3)),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 10,
+                          horizontal: 14,
                         ),
-                        child: Row(children: [
-                          const Icon(Icons.workspace_premium_rounded,
-                              color: _C.success, size: 18),
-                          const SizedBox(width: 8),
-                          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            const Text('WINNINGS EARNED', style: TextStyle(
-                              color: _C.success, fontSize: 9,
-                              fontWeight: FontWeight.w800, letterSpacing: 1,
-                            )),
-                            Text('₹${p.winnings!.toInt()}',
-                              style: const TextStyle(
-                                color: _C.success, fontSize: 20,
-                                fontWeight: FontWeight.w900,
-                              )),
-                          ]),
-                          const Spacer(),
-                          const Icon(Icons.check_circle_rounded,
-                              color: _C.success, size: 24),
-                        ]),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              _C.success.withValues(alpha: 0.12),
+                              _C.success.withValues(alpha: 0.04),
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: _C.success.withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.workspace_premium_rounded,
+                              color: _C.success,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'WINNINGS EARNED',
+                                  style: TextStyle(
+                                    color: _C.success,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                                Text(
+                                  '₹${p.winnings!.toInt()}',
+                                  style: const TextStyle(
+                                    color: _C.success,
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const Spacer(),
+                            const Icon(
+                              Icons.check_circle_rounded,
+                              color: _C.success,
+                              size: 24,
+                            ),
+                          ],
+                        ),
                       ),
                     ],
 
@@ -1156,8 +1309,18 @@ class _CompletedEventCardState extends State<CompletedEventCard> {
 
   String _formatDate(DateTime dt) {
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     return '${months[dt.month - 1]} ${dt.day}';
   }
@@ -1170,14 +1333,14 @@ class _CompletedEventCardState extends State<CompletedEventCard> {
 /// Banner image with graceful fallback
 class _BannerImage extends StatelessWidget {
   final String? bannerUrl;
-  final String  tournamentType;
+  final String tournamentType;
   const _BannerImage({this.bannerUrl, required this.tournamentType});
 
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
       borderRadius: const BorderRadius.only(
-        topLeft:  Radius.circular(20),
+        topLeft: Radius.circular(20),
         topRight: Radius.circular(20),
       ),
       child: SizedBox(
@@ -1189,7 +1352,8 @@ class _BannerImage extends StatelessWidget {
                 fit: BoxFit.cover,
                 color: Colors.black38,
                 colorBlendMode: BlendMode.darken,
-                errorBuilder: (_, _, _) => _FallbackBanner(tournamentType: tournamentType),
+                errorBuilder: (_, _, _) =>
+                    _FallbackBanner(tournamentType: tournamentType),
               )
             : _FallbackBanner(tournamentType: tournamentType),
       ),
@@ -1203,10 +1367,14 @@ class _FallbackBanner extends StatelessWidget {
 
   static Color _accent(String type) {
     switch (type) {
-      case 'clash_squad': return const Color(0xFFFF6B35);
-      case 'lone_wolf':   return const Color(0xFF00D4FF);
-      case 'league':      return _C.gold;
-      default:            return _C.purple;
+      case 'clash_squad':
+        return const Color(0xFFFF6B35);
+      case 'lone_wolf':
+        return const Color(0xFF00D4FF);
+      case 'league':
+        return _C.gold;
+      default:
+        return _C.purple;
     }
   }
 
@@ -1225,9 +1393,7 @@ class _FallbackBanner extends StatelessWidget {
           end: Alignment.bottomRight,
         ),
       ),
-      child: CustomPaint(
-        painter: _MiniEsportsPainter(accent: accent),
-      ),
+      child: CustomPaint(painter: _MiniEsportsPainter(accent: accent)),
     );
   }
 }
@@ -1262,13 +1428,15 @@ class _MiniEsportsPainter extends CustomPainter {
 
 /// Countdown block widget
 class _CountdownBlock extends StatelessWidget {
-  final String   label;
+  final String label;
   final Duration duration;
-  final Color    color;
+  final Color color;
   final IconData icon;
   const _CountdownBlock({
-    required this.label, required this.duration,
-    required this.color, required this.icon,
+    required this.label,
+    required this.duration,
+    required this.color,
+    required this.icon,
   });
 
   String _fmt(Duration d) {
@@ -1293,19 +1461,28 @@ class _CountdownBlock extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            Icon(icon, color: color.withValues(alpha: 0.7), size: 11),
-            const SizedBox(width: 4),
-            Text(label, style: TextStyle(
-              color: color.withValues(alpha: 0.7),
-              fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8,
-            )),
-          ]),
+          Row(
+            children: [
+              Icon(icon, color: color.withValues(alpha: 0.7), size: 11),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  color: color.withValues(alpha: 0.7),
+                  fontSize: 8,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 4),
           Text(
             duration.inSeconds <= 0 ? 'NOW' : _fmt(duration),
             style: TextStyle(
-              color: color, fontSize: 14, fontWeight: FontWeight.w900,
+              color: color,
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
               letterSpacing: 0.5,
             ),
           ),
@@ -1329,19 +1506,30 @@ class _RoomReadyBlock extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            const Icon(Icons.lock_open_rounded,
-                color: _C.success, size: 11),
-            const SizedBox(width: 4),
-            Text('ROOM REVEALED', style: TextStyle(
-              color: _C.success.withValues(alpha: 0.7),
-              fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8,
-            )),
-          ]),
+          Row(
+            children: [
+              const Icon(Icons.lock_open_rounded, color: _C.success, size: 11),
+              const SizedBox(width: 4),
+              Text(
+                'ROOM REVEALED',
+                style: TextStyle(
+                  color: _C.success.withValues(alpha: 0.7),
+                  fontSize: 8,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 4),
-          const Text('UNLOCKED', style: TextStyle(
-            color: _C.success, fontSize: 14, fontWeight: FontWeight.w900,
-          )),
+          const Text(
+            'UNLOCKED',
+            style: TextStyle(
+              color: _C.success,
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
         ],
       ),
     );
@@ -1355,21 +1543,27 @@ class _RoomRevealedSection extends StatelessWidget {
 
   void _copy(BuildContext ctx, String text, String label) {
     Clipboard.setData(ClipboardData(text: text));
-    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-      content: Text('$label copied!',
-          style: const TextStyle(color: _C.textPrimary)),
-      backgroundColor: _C.surfaceElevated,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10),
-          side: BorderSide(color: _C.success.withValues(alpha: 0.4))),
-    ));
+    ScaffoldMessenger.of(ctx).showSnackBar(
+      SnackBar(
+        content: Text(
+          '$label copied!',
+          style: const TextStyle(color: _C.textPrimary),
+        ),
+        backgroundColor: _C.surfaceElevated,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(color: _C.success.withValues(alpha: 0.4)),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final t = tournament;
     final hasRoom = t.roomId != null && t.roomId!.isNotEmpty;
-    final hasPw   = t.roomPassword != null && t.roomPassword!.isNotEmpty;
+    final hasPw = t.roomPassword != null && t.roomPassword!.isNotEmpty;
 
     if (!hasRoom && !hasPw) {
       return Container(
@@ -1379,29 +1573,40 @@ class _RoomRevealedSection extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: _C.gold.withValues(alpha: 0.2)),
         ),
-        child: const Row(children: [
-          Icon(Icons.hourglass_top_rounded, color: _C.gold, size: 16),
-          SizedBox(width: 8),
-          Text('Room details loading soon…', style: TextStyle(
-            color: _C.gold, fontSize: 12, fontWeight: FontWeight.w600,
-          )),
-        ]),
+        child: const Row(
+          children: [
+            Icon(Icons.hourglass_top_rounded, color: _C.gold, size: 16),
+            SizedBox(width: 8),
+            Text(
+              'Room details loading soon…',
+              style: TextStyle(
+                color: _C.gold,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
       );
     }
 
     return Column(
       children: [
-        if (hasRoom) _CopyField(
-          label: 'ROOM ID', value: t.roomId!,
-          icon: Icons.meeting_room_rounded,
-          onCopy: () => _copy(context, t.roomId!, 'Room ID'),
-        ),
+        if (hasRoom)
+          _CopyField(
+            label: 'ROOM ID',
+            value: t.roomId!,
+            icon: Icons.meeting_room_rounded,
+            onCopy: () => _copy(context, t.roomId!, 'Room ID'),
+          ),
         if (hasRoom && hasPw) const SizedBox(height: 8),
-        if (hasPw) _CopyField(
-          label: 'PASSWORD', value: t.roomPassword!,
-          icon: Icons.vpn_key_rounded,
-          onCopy: () => _copy(context, t.roomPassword!, 'Password'),
-        ),
+        if (hasPw)
+          _CopyField(
+            label: 'PASSWORD',
+            value: t.roomPassword!,
+            icon: Icons.vpn_key_rounded,
+            onCopy: () => _copy(context, t.roomPassword!, 'Password'),
+          ),
       ],
     );
   }
@@ -1417,7 +1622,7 @@ class _OngoingRoomSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = tournament;
     final hasRoom = t.roomId != null && t.roomId!.isNotEmpty;
-    final hasPw   = t.roomPassword != null && t.roomPassword!.isNotEmpty;
+    final hasPw = t.roomPassword != null && t.roomPassword!.isNotEmpty;
 
     if (!hasRoom && !hasPw) {
       return Container(
@@ -1427,44 +1632,69 @@ class _OngoingRoomSection extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: _C.border),
         ),
-        child: const Row(children: [
-          Icon(Icons.lock_rounded, color: _C.purple, size: 20),
-          SizedBox(width: 12),
-          Expanded(child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Room Details', style: TextStyle(
-                color: _C.textPrimary, fontSize: 13, fontWeight: FontWeight.w700)),
-              SizedBox(height: 2),
-              Text('Waiting for organiser to post room details.',
-                style: TextStyle(color: _C.textSecondary, fontSize: 11, height: 1.4)),
-            ],
-          )),
-        ]),
+        child: const Row(
+          children: [
+            Icon(Icons.lock_rounded, color: _C.purple, size: 20),
+            SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Room Details',
+                    style: TextStyle(
+                      color: _C.textPrimary,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Waiting for organiser to post room details.',
+                    style: TextStyle(
+                      color: _C.textSecondary,
+                      fontSize: 11,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       );
     }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('ROOM ACCESS', style: TextStyle(
-          color: _C.textMuted, fontSize: 9,
-          fontWeight: FontWeight.w700, letterSpacing: 1,
-        )),
+        const Text(
+          'ROOM ACCESS',
+          style: TextStyle(
+            color: _C.textMuted,
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1,
+          ),
+        ),
         const SizedBox(height: 8),
-        if (hasRoom) _CopyField(
-          label: 'ROOM ID', value: t.roomId!,
-          icon: Icons.meeting_room_rounded,
-          onCopy: () => onCopy(t.roomId!, 'Room ID'),
-          accentColor: _C.live,
-        ),
+        if (hasRoom)
+          _CopyField(
+            label: 'ROOM ID',
+            value: t.roomId!,
+            icon: Icons.meeting_room_rounded,
+            onCopy: () => onCopy(t.roomId!, 'Room ID'),
+            accentColor: _C.live,
+          ),
         if (hasRoom && hasPw) const SizedBox(height: 8),
-        if (hasPw) _CopyField(
-          label: 'PASSWORD', value: t.roomPassword!,
-          icon: Icons.vpn_key_rounded,
-          onCopy: () => onCopy(t.roomPassword!, 'Password'),
-          accentColor: _C.live,
-        ),
+        if (hasPw)
+          _CopyField(
+            label: 'PASSWORD',
+            value: t.roomPassword!,
+            icon: Icons.vpn_key_rounded,
+            onCopy: () => onCopy(t.roomPassword!, 'Password'),
+            accentColor: _C.live,
+          ),
       ],
     );
   }
@@ -1472,9 +1702,9 @@ class _OngoingRoomSection extends StatelessWidget {
 
 /// Copyable field widget
 class _CopyField extends StatelessWidget {
-  final String     label;
-  final String     value;
-  final IconData   icon;
+  final String label;
+  final String value;
+  final IconData icon;
   final VoidCallback onCopy;
   final Color accentColor;
 
@@ -1495,36 +1725,50 @@ class _CopyField extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: accentColor.withValues(alpha: 0.2)),
       ),
-      child: Row(children: [
-        Icon(icon, color: accentColor, size: 14),
-        const SizedBox(width: 8),
-        Expanded(child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label, style: const TextStyle(
-              color: _C.textMuted, fontSize: 8,
-              fontWeight: FontWeight.w700, letterSpacing: 0.8,
-            )),
-            const SizedBox(height: 1),
-            Text(value, style: const TextStyle(
-              color: _C.textPrimary, fontSize: 15,
-              fontWeight: FontWeight.w800, letterSpacing: 1.5,
-            )),
-          ],
-        )),
-        GestureDetector(
-          onTap: onCopy,
-          child: Container(
-            padding: const EdgeInsets.all(7),
-            decoration: BoxDecoration(
-              color: accentColor.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: accentColor.withValues(alpha: 0.25)),
+      child: Row(
+        children: [
+          Icon(icon, color: accentColor, size: 14),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: _C.textMuted,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    color: _C.textPrimary,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.5,
+                  ),
+                ),
+              ],
             ),
-            child: Icon(Icons.copy_rounded, color: accentColor, size: 13),
           ),
-        ),
-      ]),
+          GestureDetector(
+            onTap: onCopy,
+            child: Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: accentColor.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: accentColor.withValues(alpha: 0.25)),
+              ),
+              child: Icon(Icons.copy_rounded, color: accentColor, size: 13),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1532,55 +1776,91 @@ class _CopyField extends StatelessWidget {
 /// Mini stat chip
 class _MiniStat extends StatelessWidget {
   final IconData icon;
-  final String   label;
-  final String   value;
-  final Color    color;
-  const _MiniStat({required this.icon, required this.label,
-      required this.value, required this.color});
+  final String label;
+  final String value;
+  final Color color;
+  const _MiniStat({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(label, style: const TextStyle(
-        color: _C.textMuted, fontSize: 8,
-        fontWeight: FontWeight.w700, letterSpacing: 0.8,
-      )),
-      const SizedBox(height: 3),
-      Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, color: color, size: 11),
-        const SizedBox(width: 4),
-        Text(value, style: TextStyle(
-          color: color, fontSize: 12, fontWeight: FontWeight.w800,
-        )),
-      ]),
-    ]);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: _C.textMuted,
+            fontSize: 8,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.8,
+          ),
+        ),
+        const SizedBox(height: 3),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 11),
+            const SizedBox(width: 4),
+            Text(
+              value,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 }
 
 /// Result stat (for completed card)
 class _ResultStat extends StatelessWidget {
   final IconData icon;
-  final String   label;
-  final String   value;
-  final Color    color;
-  const _ResultStat({required this.icon, required this.label,
-      required this.value, required this.color});
+  final String label;
+  final String value;
+  final Color color;
+  const _ResultStat({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      child: Column(children: [
-        Icon(icon, color: color, size: 18),
-        const SizedBox(height: 4),
-        Text(value, style: TextStyle(
-          color: color, fontSize: 16, fontWeight: FontWeight.w900,
-        )),
-        const SizedBox(height: 2),
-        Text(label, style: const TextStyle(
-          color: _C.textMuted, fontSize: 8,
-          fontWeight: FontWeight.w700, letterSpacing: 0.8,
-        )),
-      ]),
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: TextStyle(
+              color: color,
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: const TextStyle(
+              color: _C.textMuted,
+              fontSize: 8,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1590,7 +1870,9 @@ class _VertDivider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 1, height: 40, color: _C.border,
+      width: 1,
+      height: 40,
+      color: _C.border,
       margin: const EdgeInsets.symmetric(horizontal: 8),
     );
   }
@@ -1607,14 +1889,22 @@ class _JoinedPill extends StatelessWidget {
         borderRadius: BorderRadius.circular(5),
         border: Border.all(color: _C.success.withValues(alpha: 0.35)),
       ),
-      child: const Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.check_circle_rounded, color: _C.success, size: 9),
-        SizedBox(width: 3),
-        Text('JOINED', style: TextStyle(
-          color: _C.success, fontSize: 8,
-          fontWeight: FontWeight.w800, letterSpacing: 0.5,
-        )),
-      ]),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.check_circle_rounded, color: _C.success, size: 9),
+          SizedBox(width: 3),
+          Text(
+            'JOINED',
+            style: TextStyle(
+              color: _C.success,
+              fontSize: 8,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1628,26 +1918,31 @@ class _LiveDot extends StatefulWidget {
 class _LiveDotState extends State<_LiveDot>
     with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
-  late Animation<double>   _anim;
+  late Animation<double> _anim;
 
   @override
   void initState() {
     super.initState();
     _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 900))
-      ..repeat(reverse: true);
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
     _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
   }
 
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _anim,
       builder: (_, _) => Container(
-        width: 7, height: 7,
+        width: 7,
+        height: 7,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: _C.live.withValues(alpha: 0.5 + 0.5 * _anim.value),
@@ -1662,14 +1957,16 @@ class _LiveDotState extends State<_LiveDot>
 
 /// Quick access button
 class _QuickAccessButton extends StatelessWidget {
-  final String       label;
-  final IconData     icon;
+  final String label;
+  final IconData icon;
   final VoidCallback onTap;
-  final Color        color;
-  final bool         outline;
+  final Color color;
+  final bool outline;
   const _QuickAccessButton({
-    required this.label, required this.icon,
-    required this.onTap, required this.color,
+    required this.label,
+    required this.icon,
+    required this.onTap,
+    required this.color,
     this.outline = false,
   });
 
@@ -1687,14 +1984,22 @@ class _QuickAccessButton extends StatelessWidget {
             color: color.withValues(alpha: outline ? 0.3 : 0.4),
           ),
         ),
-        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Text(label, style: TextStyle(
-            color: color, fontSize: 11,
-            fontWeight: FontWeight.w800, letterSpacing: 1,
-          )),
-          const SizedBox(width: 6),
-          Icon(icon, color: color, size: 12),
-        ]),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Icon(icon, color: color, size: 12),
+          ],
+        ),
       ),
     );
   }
@@ -1714,22 +2019,34 @@ class _NotLoggedIn extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 72, height: 72,
+            width: 72,
+            height: 72,
             decoration: BoxDecoration(
-              color: _C.purpleGlowFaint, shape: BoxShape.circle,
+              color: _C.purpleGlowFaint,
+              shape: BoxShape.circle,
               border: Border.all(color: _C.border),
             ),
-            child: const Icon(Icons.person_off_rounded,
-                color: _C.purple, size: 30),
+            child: const Icon(
+              Icons.person_off_rounded,
+              color: _C.purple,
+              size: 30,
+            ),
           ),
           const SizedBox(height: 16),
-          const Text('Not Logged In', style: TextStyle(
-            color: _C.textPrimary, fontSize: 16, fontWeight: FontWeight.w700,
-          )),
+          const Text(
+            'Not Logged In',
+            style: TextStyle(
+              color: _C.textPrimary,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
           const SizedBox(height: 6),
-          const Text('Login to see your tournaments.',
+          const Text(
+            'Login to see your tournaments.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: _C.textSecondary, fontSize: 13)),
+            style: TextStyle(color: _C.textSecondary, fontSize: 13),
+          ),
         ],
       ),
     );
@@ -1759,19 +2076,23 @@ class _ShimmerCard extends StatefulWidget {
 class _ShimmerCardState extends State<_ShimmerCard>
     with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
-  late Animation<double>   _anim;
+  late Animation<double> _anim;
 
   @override
   void initState() {
     super.initState();
     _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1200))
-      ..repeat(reverse: true);
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
     _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
   }
 
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1806,17 +2127,31 @@ class _ErrorState extends StatelessWidget {
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: _C.live.withValues(alpha: 0.3)),
           ),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.error_outline_rounded, color: _C.live, size: 30),
-            const SizedBox(height: 10),
-            const Text('Something went wrong', style: TextStyle(
-              color: _C.textPrimary, fontSize: 15, fontWeight: FontWeight.w700,
-            )),
-            const SizedBox(height: 6),
-            Text(message, textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: _C.textSecondary, fontSize: 12, height: 1.5)),
-          ]),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline_rounded, color: _C.live, size: 30),
+              const SizedBox(height: 10),
+              const Text(
+                'Something went wrong',
+                style: TextStyle(
+                  color: _C.textPrimary,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: _C.textSecondary,
+                  fontSize: 12,
+                  height: 1.5,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1831,44 +2166,70 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     String emoji, title, subtitle;
     switch (status) {
+      //error on switch
       case TournamentStatus.upcoming:
-        emoji    = '📅';
-        title    = 'No Upcoming Events';
+        emoji = '📅';
+        title = 'No Upcoming Events';
         subtitle = 'Join a tournament from the Home screen\nto see it here.';
         break;
       case TournamentStatus.live:
-        emoji    = '🎮';
-        title    = 'No Ongoing Matches';
-        subtitle = 'You don\'t have any live tournaments\nright now. Check back soon!';
+        emoji = '🎮';
+        title = 'No Ongoing Matches';
+        subtitle =
+            'You don\'t have any live tournaments\nright now. Check back soon!';
         break;
       case TournamentStatus.completed:
-        emoji    = '🏆';
-        title    = 'No Match History Yet';
-        subtitle = 'Completed tournaments will appear here\nafter your first match.';
+        emoji = '🏆';
+        title = 'No Match History Yet';
+        subtitle =
+            'Completed tournaments will appear here\nafter your first match.';
+        break;
+      case TournamentStatus.cancelled:
+        emoji = '❌';
+        title = 'No Cancelled Events';
+        subtitle = 'You have no cancelled tournaments.';
         break;
     }
 
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(40),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Container(
-            width: 72, height: 72,
-            decoration: BoxDecoration(
-              color: _C.purpleGlowFaint, shape: BoxShape.circle,
-              border: Border.all(color: _C.border),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: _C.purpleGlowFaint,
+                shape: BoxShape.circle,
+                border: Border.all(color: _C.border),
+              ),
+              child: Center(
+                child: Text(emoji, style: const TextStyle(fontSize: 30)),
+              ),
             ),
-            child: Center(child: Text(emoji, style: const TextStyle(fontSize: 30))),
-          ),
-          const SizedBox(height: 16),
-          Text(title, style: const TextStyle(
-            color: _C.textPrimary, fontSize: 16, fontWeight: FontWeight.w700,
-          )),
-          const SizedBox(height: 6),
-          Text(subtitle, textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: _C.textSecondary, fontSize: 13, height: 1.5)),
-        ]),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              style: const TextStyle(
+                color: _C.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: _C.textSecondary,
+                fontSize: 13,
+                height: 1.5,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
