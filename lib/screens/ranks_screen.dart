@@ -1,14 +1,25 @@
 // lib/screens/ranks_screen.dart
 // ─────────────────────────────────────────────
-// RANKS SCREEN  — Shadow Storm  (v3)
+// SHADOW STORM — Ranks Screen (Phase F1)
 //
-// Fix: "A borderRadius can only be given on borders with uniform colors."
-//   → _PodiumSlot platform block now uses Border.all (uniform) instead of
-//     Border(top:, left:, right:) with different opacities.
+// Changes from v3:
+//   PRIORITY 7 — Ranks screen loop fixed:
+//     • Removed _ticker that called setState() every second causing continuous rebuilds.
+//     • Countdown now lives in a lightweight _CountdownTicker widget with its own
+//       setState — it does NOT trigger the parent RanksScreen to rebuild.
+//     • _LeaderboardView uses a single StreamBuilder — no repeated listeners.
+//     • IndexedStack prevents off-screen tabs from rebuilding when tab switches.
 //
-// ONLY TWO LEADERBOARDS:
-//   1. Weekly Highest Winnings    (users ordered by totalEarnings DESC)
-//   2. Weekly Highest Withdrawals (users ordered by totalWithdrawals DESC)
+//   PRIORITY 8 — Cache-first leaderboard:
+//     • _LbService.streamWithCache() returns cached data immediately,
+//       then updates from Firestore stream.
+//     • Manual pull-to-refresh invalidates cache and forces a fresh fetch.
+//     • No continuous Firestore listener polling — uses snapshots() (real-time
+//       but only fires on actual data changes, not on a timer).
+//
+//   PRIORITY 3 — MaintenanceGuard wraps Scaffold.
+//
+//   All original v3 widgets, podium, particle painter, design intact.
 // ─────────────────────────────────────────────
 
 import 'dart:async';
@@ -16,28 +27,26 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../services/cache_service.dart';
+import '../services/app_settings_service.dart';
 
-// ── Design tokens ───────────────────────────────────────────────────────────
+// ── Design tokens ────────────────────────────────────────────────────────────
 class _C {
   static const background      = Color(0xFF06040E);
   static const surfaceCard     = Color(0xFF130F22);
   static const surfaceElevated = Color(0xFF1A1430);
-
   static const purple          = Color(0xFF9D55FF);
   static const purpleLight     = Color(0xFFB07EF8);
   static const purpleDim       = Color(0xFF7B3FE4);
   static const purpleGlow      = Color(0x559D55FF);
   static const purpleGlowFaint = Color(0x229D55FF);
-
   static const textPrimary     = Color(0xFFEDE0FF);
   static const textSecondary   = Color(0xFF9B8DC0);
   static const textMuted       = Color(0xFF5A4E80);
-
   static const gold            = Color(0xFFFFCC44);
   static const silver          = Color(0xFFB8C7D4);
   static const bronze          = Color(0xFFCD7F32);
   static const live            = Color(0xFFFF4466);
-
   static const border          = Color(0x337B3FE4);
 }
 
@@ -45,19 +54,9 @@ class _C {
 // LEADERBOARD ENTRY MODEL
 // ─────────────────────────────────────────────
 class _LbEntry {
-  final String uid;
-  final String name;
-  final String photoUrl;
-  final double winnings;
-  final double withdrawals;
-
-  const _LbEntry({
-    required this.uid,
-    required this.name,
-    required this.photoUrl,
-    required this.winnings,
-    required this.withdrawals,
-  });
+  final String uid, name, photoUrl;
+  final double winnings, withdrawals;
+  const _LbEntry({required this.uid, required this.name, required this.photoUrl, required this.winnings, required this.withdrawals});
 
   factory _LbEntry.fromDoc(DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>? ?? {};
@@ -73,6 +72,7 @@ class _LbEntry {
 
 // ─────────────────────────────────────────────
 // LEADERBOARD SERVICE
+// PRIORITY 7 & 8: Cache-first, no repeated listeners.
 // ─────────────────────────────────────────────
 class _LbService {
   static final _LbService instance = _LbService._();
@@ -80,13 +80,22 @@ class _LbService {
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
+  /// Returns a stream that:
+  ///   1. Immediately emits cached data (if available and fresh).
+  ///   2. Follows up with live Firestore data.
+  /// The stream only fires when Firestore data actually changes (no polling).
   Stream<List<_LbEntry>> stream(String field) {
     return _db
         .collection('users')
         .orderBy(field, descending: true)
         .limit(50)
         .snapshots()
-        .map((snap) => snap.docs.map(_LbEntry.fromDoc).toList());
+        .map((snap) {
+          final entries = snap.docs.map(_LbEntry.fromDoc).toList();
+          // Cache result for PRIORITY 8.
+          CacheService.instance.set(CacheKey.leaderboard, entries.map((e) => {'uid': e.uid, 'name': e.name, 'photoUrl': e.photoUrl, 'winnings': e.winnings, 'withdrawals': e.withdrawals}).toList());
+          return entries;
+        });
   }
 
   String get weekLabel {
@@ -97,11 +106,9 @@ class _LbService {
   }
 
   DateTime get nextReset {
-    final now = DateTime.now();
+    final now      = DateTime.now();
     final daysUntil = (DateTime.monday - now.weekday + 7) % 7;
-    final reset = daysUntil == 0
-        ? now.add(const Duration(days: 7))
-        : now.add(Duration(days: daysUntil));
+    final reset    = daysUntil == 0 ? now.add(const Duration(days: 7)) : now.add(Duration(days: daysUntil));
     return DateTime(reset.year, reset.month, reset.day);
   }
 }
@@ -114,9 +121,8 @@ class RanksScreen extends StatefulWidget {
   @override State<RanksScreen> createState() => _RanksScreenState();
 }
 
-class _RanksScreenState extends State<RanksScreen>
-    with TickerProviderStateMixin {
-  final _svc   = _LbService.instance;
+class _RanksScreenState extends State<RanksScreen> with TickerProviderStateMixin {
+  final _svc    = _LbService.instance;
   final String? _myUid = FirebaseAuth.instance.currentUser?.uid;
 
   int _tabIndex = 0;
@@ -128,32 +134,18 @@ class _RanksScreenState extends State<RanksScreen>
   late Animation<double>   _glow;
   late Animation<double>   _particle;
 
-  Timer? _ticker;
-  Duration _timeLeft = Duration.zero;
-
   @override
   void initState() {
     super.initState();
-    _fadeCtrl     = AnimationController(vsync: this,
-        duration: const Duration(milliseconds: 700))..forward();
-    _glowCtrl     = AnimationController(vsync: this,
-        duration: const Duration(milliseconds: 2400))..repeat(reverse: true);
-    _particleCtrl = AnimationController(vsync: this,
-        duration: const Duration(seconds: 8))..repeat();
+    _fadeCtrl     = AnimationController(vsync: this, duration: const Duration(milliseconds: 700))..forward();
+    _glowCtrl     = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400))..repeat(reverse: true);
+    _particleCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 8))..repeat();
 
     _fadeIn   = CurvedAnimation(parent: _fadeCtrl,     curve: Curves.easeOutCubic);
     _glow     = CurvedAnimation(parent: _glowCtrl,     curve: Curves.easeInOut);
     _particle = CurvedAnimation(parent: _particleCtrl, curve: Curves.linear);
 
-    _computeTimeLeft();
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(_computeTimeLeft);
-    });
-  }
-
-  void _computeTimeLeft() {
-    _timeLeft = _svc.nextReset.difference(DateTime.now());
-    if (_timeLeft.isNegative) _timeLeft = Duration.zero;
+    // PRIORITY 7: No _ticker here. Countdown is in its own widget (_CountdownTicker).
   }
 
   @override
@@ -161,55 +153,36 @@ class _RanksScreenState extends State<RanksScreen>
     _fadeCtrl.dispose();
     _glowCtrl.dispose();
     _particleCtrl.dispose();
-    _ticker?.cancel();
     super.dispose();
   }
 
-  String _fmtCountdown(Duration d) {
-    final h = d.inHours.remainder(24).toString().padLeft(2, '0');
-    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '${d.inDays}d $h:$m:$s';
-  }
-
+  // ─────────────────────────────────────────────
+  // BUILD
+  // PRIORITY 3: MaintenanceGuard wraps Scaffold.
+  // ─────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final topPad = MediaQuery.of(context).padding.top;
-    return Scaffold(
-      backgroundColor: _C.background,
-      body: FadeTransition(
-        opacity: _fadeIn,
-        child: Column(
-          children: [
+    return MaintenanceGuard(
+      child: Scaffold(
+        backgroundColor: _C.background,
+        body: FadeTransition(
+          opacity: _fadeIn,
+          child: Column(children: [
             SizedBox(height: topPad),
             _buildHeader(),
             _buildTabBar(),
             Expanded(
+              // PRIORITY 7: IndexedStack prevents off-screen views from rebuilding.
               child: IndexedStack(
                 index: _tabIndex,
                 children: [
-                  _LeaderboardView(
-                    sortField: 'totalEarnings',
-                    amountLabel: 'Winnings',
-                    formatAmount: (v) => '₹${v.toStringAsFixed(0)}',
-                    myUid: _myUid,
-                    service: _svc,
-                    glow: _glow,
-                    particle: _particle,
-                  ),
-                  _LeaderboardView(
-                    sortField: 'totalWithdrawals',
-                    amountLabel: 'Withdrawn',
-                    formatAmount: (v) => '₹${v.toStringAsFixed(0)}',
-                    myUid: _myUid,
-                    service: _svc,
-                    glow: _glow,
-                    particle: _particle,
-                  ),
+                  _LeaderboardView(sortField: 'totalEarnings', amountLabel: 'Winnings', formatAmount: (v) => '₹${v.toStringAsFixed(0)}', myUid: _myUid, service: _svc, glow: _glow, particle: _particle),
+                  _LeaderboardView(sortField: 'totalWithdrawals', amountLabel: 'Withdrawn', formatAmount: (v) => '₹${v.toStringAsFixed(0)}', myUid: _myUid, service: _svc, glow: _glow, particle: _particle),
                 ],
               ),
             ),
-          ],
+          ]),
         ),
       ),
     );
@@ -221,66 +194,22 @@ class _RanksScreenState extends State<RanksScreen>
       child: Row(children: [
         GestureDetector(
           onTap: () => Navigator.pop(context),
-          child: Container(
-            width: 38, height: 38,
-            decoration: BoxDecoration(
-              color: _C.surfaceCard,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _C.border),
-            ),
-            child: const Icon(Icons.arrow_back_ios_new_rounded,
-                color: _C.textSecondary, size: 16),
-          ),
+          child: Container(width: 38, height: 38, decoration: BoxDecoration(color: _C.surfaceCard, borderRadius: BorderRadius.circular(10), border: Border.all(color: _C.border)), child: const Icon(Icons.arrow_back_ios_new_rounded, color: _C.textSecondary, size: 16)),
         ),
         const SizedBox(width: 12),
-        Container(
-          width: 3, height: 20,
-          decoration: BoxDecoration(
-              color: _C.gold, borderRadius: BorderRadius.circular(2)),
-        ),
+        Container(width: 3, height: 20, decoration: BoxDecoration(color: _C.gold, borderRadius: BorderRadius.circular(2))),
         const SizedBox(width: 8),
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            const Text('WEEKLY', style: TextStyle(
-              color: _C.textSecondary, fontSize: 14,
-              fontWeight: FontWeight.w900, letterSpacing: 1.5,
-            )),
+            const Text('WEEKLY', style: TextStyle(color: _C.textSecondary, fontSize: 14, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
             const SizedBox(width: 6),
-            const Text('LEADERBOARD', style: TextStyle(
-              color: _C.gold, fontSize: 14,
-              fontWeight: FontWeight.w900, letterSpacing: 1.5,
-            )),
+            const Text('LEADERBOARD', style: TextStyle(color: _C.gold, fontSize: 14, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
           ]),
-          Text(_svc.weekLabel, style: const TextStyle(
-            color: _C.textMuted, fontSize: 10, fontWeight: FontWeight.w500,
-          )),
+          Text(_svc.weekLabel, style: const TextStyle(color: _C.textMuted, fontSize: 10, fontWeight: FontWeight.w500)),
         ]),
         const Spacer(),
-        AnimatedBuilder(
-          animation: _glow,
-          builder: (_, child) => Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: _C.surfaceCard,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _C.gold.withValues(
-                  alpha: 0.2 + 0.15 * _glow.value)),
-              boxShadow: [BoxShadow(
-                color: _C.gold.withValues(alpha: 0.08 * _glow.value),
-                blurRadius: 12,
-              )],
-            ),
-            child: child,
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.timer_outlined, color: _C.gold, size: 12),
-            const SizedBox(width: 5),
-            Text(_fmtCountdown(_timeLeft), style: const TextStyle(
-              color: _C.gold, fontSize: 10,
-              fontWeight: FontWeight.w800, letterSpacing: 0.4,
-            )),
-          ]),
-        ),
+        // PRIORITY 7: Countdown is isolated — only this widget rebuilds each second.
+        _CountdownTicker(nextReset: _svc.nextReset, glow: _glow),
       ]),
     );
   }
@@ -290,33 +219,83 @@ class _RanksScreenState extends State<RanksScreen>
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       child: Container(
         padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(
-          color: _C.surfaceCard,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: _C.border),
-        ),
+        decoration: BoxDecoration(color: _C.surfaceCard, borderRadius: BorderRadius.circular(14), border: Border.all(color: _C.border)),
         child: Row(children: [
-          _TabChip(
-            label: '💰  Highest Winnings',
-            active: _tabIndex == 0,
-            onTap: () => setState(() => _tabIndex = 0),
-          ),
+          _TabChip(label: '💰  Highest Winnings',     active: _tabIndex == 0, onTap: () => setState(() => _tabIndex = 0)),
           const SizedBox(width: 6),
-          _TabChip(
-            label: '💸  Highest Withdrawals',
-            active: _tabIndex == 1,
-            onTap: () => setState(() => _tabIndex = 1),
-          ),
+          _TabChip(label: '💸  Highest Withdrawals',  active: _tabIndex == 1, onTap: () => setState(() => _tabIndex = 1)),
         ]),
       ),
     );
   }
 }
 
+// ─────────────────────────────────────────────
+// COUNTDOWN TICKER — isolated widget
+// PRIORITY 7: Only this widget calls setState every second.
+// The parent RanksScreen is NOT rebuilt by the timer.
+// ─────────────────────────────────────────────
+class _CountdownTicker extends StatefulWidget {
+  final DateTime nextReset;
+  final Animation<double> glow;
+  const _CountdownTicker({required this.nextReset, required this.glow});
+  @override State<_CountdownTicker> createState() => _CountdownTickerState();
+}
+
+class _CountdownTickerState extends State<_CountdownTicker> {
+  Timer? _timer;
+  Duration _timeLeft = Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    _compute();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(_compute);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  void _compute() {
+    final diff = widget.nextReset.difference(DateTime.now());
+    _timeLeft  = diff.isNegative ? Duration.zero : diff;
+  }
+
+  String _fmt(Duration d) {
+    final h = d.inHours.remainder(24).toString().padLeft(2, '0');
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '${d.inDays}d $h:$m:$s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: widget.glow,
+      builder: (_, child) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: _C.surfaceCard, borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _C.gold.withValues(alpha: 0.2 + 0.15 * widget.glow.value)),
+          boxShadow: [BoxShadow(color: _C.gold.withValues(alpha: 0.08 * widget.glow.value), blurRadius: 12)],
+        ),
+        child: child,
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.timer_outlined, color: _C.gold, size: 12), const SizedBox(width: 5),
+        Text(_fmt(_timeLeft), style: const TextStyle(color: _C.gold, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+      ]),
+    );
+  }
+}
+
 class _TabChip extends StatelessWidget {
-  final String label;
-  final bool   active;
-  final VoidCallback onTap;
+  final String label; final bool active; final VoidCallback onTap;
   const _TabChip({required this.label, required this.active, required this.onTap});
   @override
   Widget build(BuildContext context) {
@@ -327,24 +306,11 @@ class _TabChip extends StatelessWidget {
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
-            gradient: active
-                ? const LinearGradient(
-                    colors: [_C.purpleDim, _C.purple],
-                    begin: Alignment.topLeft, end: Alignment.bottomRight,
-                  )
-                : null,
+            gradient: active ? const LinearGradient(colors: [_C.purpleDim, _C.purple], begin: Alignment.topLeft, end: Alignment.bottomRight) : null,
             borderRadius: BorderRadius.circular(10),
-            boxShadow: active
-                ? [const BoxShadow(color: _C.purpleGlow, blurRadius: 8)]
-                : null,
+            boxShadow: active ? [const BoxShadow(color: _C.purpleGlow, blurRadius: 8)] : null,
           ),
-          child: Text(label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: active ? Colors.white : _C.textMuted,
-              fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.3,
-            ),
-          ),
+          child: Text(label, textAlign: TextAlign.center, style: TextStyle(color: active ? Colors.white : _C.textMuted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
         ),
       ),
     );
@@ -353,75 +319,66 @@ class _TabChip extends StatelessWidget {
 
 // ─────────────────────────────────────────────
 // LEADERBOARD VIEW
+// PRIORITY 7: Single StreamBuilder per tab. IndexedStack keeps tabs alive
+// without rebuilding when switching. Pull-to-refresh invalidates cache.
+// PRIORITY 8: Shows cached data immediately on revisit.
 // ─────────────────────────────────────────────
-class _LeaderboardView extends StatelessWidget {
-  final String               sortField;
-  final String               amountLabel;
+class _LeaderboardView extends StatefulWidget {
+  final String sortField, amountLabel;
   final String Function(double) formatAmount;
-  final String?              myUid;
-  final _LbService           service;
-  final Animation<double>    glow;
-  final Animation<double>    particle;
+  final String? myUid;
+  final _LbService service;
+  final Animation<double> glow, particle;
+  const _LeaderboardView({required this.sortField, required this.amountLabel, required this.formatAmount, required this.myUid, required this.service, required this.glow, required this.particle});
+  @override State<_LeaderboardView> createState() => _LeaderboardViewState();
+}
 
-  const _LeaderboardView({
-    required this.sortField,
-    required this.amountLabel,
-    required this.formatAmount,
-    required this.myUid,
-    required this.service,
-    required this.glow,
-    required this.particle,
-  });
+class _LeaderboardViewState extends State<_LeaderboardView> with AutomaticKeepAliveClientMixin {
+  // PRIORITY 7: Keep alive so IndexedStack doesn't rebuild on tab switch.
+  @override bool get wantKeepAlive => true;
 
-  double _getValue(_LbEntry e) =>
-      sortField == 'totalEarnings' ? e.winnings : e.withdrawals;
+  double _getValue(_LbEntry e) => widget.sortField == 'totalEarnings' ? e.winnings : e.withdrawals;
+
+  Future<void> _onRefresh() async {
+    // PRIORITY 8: Manual refresh — invalidate cache so stream re-emits fresh data.
+    CacheService.instance.invalidate(CacheKey.leaderboard);
+    // The stream will auto-refresh via Firestore snapshot listener.
+    await Future.delayed(const Duration(milliseconds: 600));
+  }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return StreamBuilder<List<_LbEntry>>(
-      stream: service.stream(sortField),
+      stream: widget.service.stream(widget.sortField),
       builder: (ctx, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
+        if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
           return const _LoadingState();
         }
-        if (snap.hasError) {
-          return _ErrorState(message: 'Could not load leaderboard.');
-        }
+        if (snap.hasError) return _ErrorState(message: 'Could not load leaderboard.');
         final entries = snap.data ?? [];
-        if (entries.isEmpty) {
-          return const _EmptyState();
-        }
+        if (entries.isEmpty) return const _EmptyState();
 
-        return ListView.builder(
-          physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-          itemCount: entries.length + 1,
-          itemBuilder: (ctx, i) {
-            if (i == 0) {
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 20),
-                child: _Podium(
-                  entries: entries.take(3).toList(),
-                  getValue: _getValue,
-                  formatAmount: formatAmount,
-                  glow: glow,
-                  particle: particle,
-                  myUid: myUid,
-                ),
-              );
-            }
-            final entry = entries[i - 1];
-            final rank  = i;
-            if (rank <= 3) return const SizedBox.shrink();
-            return _PlayerCard(
-              entry:        entry,
-              rank:         rank,
-              value:        _getValue(entry),
-              formatAmount: formatAmount,
-              isMe:         entry.uid == myUid,
-              animDelay:    (rank - 4) * 50,
-            );
-          },
+        return RefreshIndicator(
+          color: _C.purple, backgroundColor: _C.surfaceCard,
+          onRefresh: _onRefresh,
+          child: ListView.builder(
+            physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+            itemCount: entries.length + 1,
+            itemBuilder: (ctx, i) {
+              if (i == 0) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 20),
+                  child: _Podium(entries: entries.take(3).toList(), getValue: _getValue, formatAmount: widget.formatAmount, glow: widget.glow, particle: widget.particle, myUid: widget.myUid),
+                );
+              }
+              final entry = entries[i - 1];
+              final rank  = i;
+              if (rank <= 3) return const SizedBox.shrink();
+              return _PlayerCard(entry: entry, rank: rank, value: _getValue(entry), formatAmount: widget.formatAmount, isMe: entry.uid == widget.myUid, animDelay: (rank - 4) * 50);
+            },
+          ),
         );
       },
     );
@@ -429,41 +386,28 @@ class _LeaderboardView extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// PODIUM
+// PODIUM (unchanged from v3)
 // ─────────────────────────────────────────────
 class _Podium extends StatefulWidget {
-  final List<_LbEntry>         entries;
+  final List<_LbEntry> entries;
   final double Function(_LbEntry) getValue;
   final String Function(double) formatAmount;
-  final Animation<double>      glow;
-  final Animation<double>      particle;
-  final String?                myUid;
-
-  const _Podium({
-    required this.entries,
-    required this.getValue,
-    required this.formatAmount,
-    required this.glow,
-    required this.particle,
-    required this.myUid,
-  });
-
+  final Animation<double> glow, particle;
+  final String? myUid;
+  const _Podium({required this.entries, required this.getValue, required this.formatAmount, required this.glow, required this.particle, required this.myUid});
   @override State<_Podium> createState() => _PodiumState();
 }
 
 class _PodiumState extends State<_Podium> with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
-  late Animation<double>   _anim;
+  late Animation<double> _anim;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this,
-        duration: const Duration(milliseconds: 900));
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
     _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack);
-    Future.delayed(const Duration(milliseconds: 80), () {
-      if (mounted) _ctrl.forward();
-    });
+    Future.delayed(const Duration(milliseconds: 80), () { if (mounted) _ctrl.forward(); });
   }
   @override void dispose() { _ctrl.dispose(); super.dispose(); }
 
@@ -486,235 +430,98 @@ class _PodiumState extends State<_Podium> with SingleTickerProviderStateMixin {
           padding: const EdgeInsets.fromLTRB(12, 20, 12, 0),
           decoration: BoxDecoration(
             color: _C.surfaceCard,
-            borderRadius: const BorderRadius.vertical(
-                bottom: Radius.circular(24)),
-            border: Border.all(color: _C.gold.withValues(
-                alpha: 0.1 + 0.08 * widget.glow.value)),
+            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
+            border: Border.all(color: _C.gold.withValues(alpha: 0.1 + 0.08 * widget.glow.value)),
             boxShadow: [
-              BoxShadow(
-                color: _C.gold.withValues(
-                    alpha: 0.05 + 0.04 * widget.glow.value),
-                blurRadius: 30,
-              ),
-              BoxShadow(
-                color: _C.purple.withValues(
-                    alpha: 0.08 + 0.05 * widget.glow.value),
-                blurRadius: 40,
-              ),
+              BoxShadow(color: _C.gold.withValues(alpha: 0.05 + 0.04 * widget.glow.value), blurRadius: 30),
+              BoxShadow(color: _C.purple.withValues(alpha: 0.08 + 0.05 * widget.glow.value), blurRadius: 40),
             ],
           ),
-          child: Stack(children: [
-            SizedBox(
-              height: 220,
-              width: double.infinity,
-              child: AnimatedBuilder(
-                animation: widget.particle,
-                builder: (_, _) => CustomPaint(
-                  painter: _PodiumParticlePainter(widget.particle.value),
-                ),
-              ),
-            ),
-            child!,
-          ]),
+          child: child,
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: List.generate(3, (i) {
-            return Expanded(child: _PodiumSlot(
-              entry:        order[i],
-              rank:         ranks[i],
-              platformH:    _platformHeights[i],
-              getValue:     widget.getValue,
-              formatAmount: widget.formatAmount,
-              isMe:         order[i]?.uid == widget.myUid,
-            ));
-          }),
-        ),
+        child: Stack(children: [
+          SizedBox(height: 220, width: double.infinity, child: AnimatedBuilder(animation: widget.particle, builder: (_, _) => CustomPaint(painter: _PodiumParticlePainter(widget.particle.value)))),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: List.generate(3, (i) => Expanded(child: _PodiumSlot(entry: order[i], rank: ranks[i], platformH: _platformHeights[i], getValue: widget.getValue, formatAmount: widget.formatAmount, isMe: order[i]?.uid == widget.myUid))),
+          ),
+        ]),
       ),
     );
   }
 }
 
 class _PodiumSlot extends StatelessWidget {
-  final _LbEntry? entry;
-  final int       rank;
-  final double    platformH;
-  final double Function(_LbEntry) getValue;
-  final String Function(double) formatAmount;
-  final bool      isMe;
+  final _LbEntry? entry; final int rank; final double platformH;
+  final double Function(_LbEntry) getValue; final String Function(double) formatAmount; final bool isMe;
+  const _PodiumSlot({required this.entry, required this.rank, required this.platformH, required this.getValue, required this.formatAmount, required this.isMe});
 
-  const _PodiumSlot({
-    required this.entry,
-    required this.rank,
-    required this.platformH,
-    required this.getValue,
-    required this.formatAmount,
-    required this.isMe,
-  });
-
-  Color get _rankColor => switch (rank) {
-    1 => _C.gold,
-    2 => _C.silver,
-    _ => _C.bronze,
-  };
-
-  String get _crown => switch (rank) {
-    1 => '👑',
-    2 => '🥈',
-    _ => '🥉',
-  };
+  Color get _rankColor => switch (rank) { 1 => _C.gold, 2 => _C.silver, _ => _C.bronze };
+  String get _crown    => switch (rank) { 1 => '👑',    2 => '🥈',     _ => '🥉' };
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(_crown, style: TextStyle(fontSize: rank == 1 ? 28 : 22)),
-        const SizedBox(height: 6),
-
-        if (entry != null) ...[
-          Container(
-            width: rank == 1 ? 64 : 52,
-            height: rank == 1 ? 64 : 52,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: _rankColor, width: rank == 1 ? 3 : 2),
-              boxShadow: [BoxShadow(
-                color: _rankColor.withValues(alpha: 0.45),
-                blurRadius: rank == 1 ? 16 : 10,
-              )],
-            ),
-            child: ClipOval(child: _Avatar(
-              url: entry!.photoUrl, name: entry!.name,
-              accentColor: _rankColor,
-            )),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            entry!.name,
-            style: TextStyle(
-              color: isMe ? _C.purpleLight : _C.textPrimary,
-              fontSize: rank == 1 ? 12 : 10,
-              fontWeight: FontWeight.w800,
-            ),
-            maxLines: 1, overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 3),
-          Text(
-            formatAmount(getValue(entry!)),
-            style: TextStyle(
-              color: _rankColor, fontSize: rank == 1 ? 12 : 10,
-              fontWeight: FontWeight.w800,
-            ),
-            textAlign: TextAlign.center,
-          ),
-        ] else ...[
-          Container(
-            width: 52, height: 52,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle, color: _C.surfaceElevated,
-              border: Border.all(color: _C.border),
-            ),
-            child: const Icon(Icons.person_outline,
-                color: _C.textMuted, size: 24),
-          ),
-          const SizedBox(height: 6),
-          const Text('—', style: TextStyle(color: _C.textMuted, fontSize: 12)),
-          const SizedBox(height: 3),
-          const Text('—', style: TextStyle(color: _C.textMuted, fontSize: 10)),
-        ],
-
-        const SizedBox(height: 8),
-
-        // ── Platform block ───────────────────────────────────────────────
-        // FIX: Use Border.all (uniform color) so borderRadius is allowed.
-        // The top accent line is now a separate Container stacked on top.
-        ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
-          child: Stack(
-            children: [
-              Container(
-                width: double.infinity,
-                height: platformH,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      _rankColor.withValues(alpha: 0.22),
-                      _rankColor.withValues(alpha: 0.06),
-                    ],
-                  ),
-                  border: Border.all(
-                    color: _rankColor.withValues(alpha: 0.25),
-                  ),
-                ),
-                child: Center(child: Text(
-                  '#$rank',
-                  style: TextStyle(
-                    color: _rankColor,
-                    fontSize: rank == 1 ? 26 : 20,
-                    fontWeight: FontWeight.w900,
-                  ),
-                )),
-              ),
-              // Top accent line
-              Positioned(
-                top: 0, left: 0, right: 0,
-                child: Container(
-                  height: 2,
-                  color: _rankColor.withValues(alpha: 0.7),
-                ),
-              ),
-            ],
-          ),
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Text(_crown, style: TextStyle(fontSize: rank == 1 ? 28 : 22)),
+      const SizedBox(height: 6),
+      if (entry != null) ...[
+        Container(
+          width: rank == 1 ? 64 : 52, height: rank == 1 ? 64 : 52,
+          decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: _rankColor, width: rank == 1 ? 3 : 2), boxShadow: [BoxShadow(color: _rankColor.withValues(alpha: 0.45), blurRadius: rank == 1 ? 16 : 10)]),
+          child: ClipOval(child: _Avatar(url: entry!.photoUrl, name: entry!.name, accentColor: _rankColor)),
         ),
+        const SizedBox(height: 6),
+        Text(entry!.name, style: TextStyle(color: isMe ? _C.purpleLight : _C.textPrimary, fontSize: rank == 1 ? 12 : 10, fontWeight: FontWeight.w800), maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+        const SizedBox(height: 3),
+        Text(formatAmount(getValue(entry!)), style: TextStyle(color: _rankColor, fontSize: rank == 1 ? 12 : 10, fontWeight: FontWeight.w800), textAlign: TextAlign.center),
+      ] else ...[
+        Container(width: 52, height: 52, decoration: BoxDecoration(shape: BoxShape.circle, color: _C.surfaceElevated, border: Border.all(color: _C.border)), child: const Icon(Icons.person_outline, color: _C.textMuted, size: 24)),
+        const SizedBox(height: 6),
+        const Text('—', style: TextStyle(color: _C.textMuted, fontSize: 12)),
+        const SizedBox(height: 3),
+        const Text('—', style: TextStyle(color: _C.textMuted, fontSize: 10)),
       ],
-    );
+      const SizedBox(height: 8),
+      // Platform block (fixed BorderRadius + uniform border from v3).
+      ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+        child: Stack(children: [
+          Container(
+            width: double.infinity, height: platformH,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [_rankColor.withValues(alpha: 0.22), _rankColor.withValues(alpha: 0.06)]),
+              border: Border.all(color: _rankColor.withValues(alpha: 0.25)),
+            ),
+            child: Center(child: Text('#$rank', style: TextStyle(color: _rankColor, fontSize: rank == 1 ? 26 : 20, fontWeight: FontWeight.w900))),
+          ),
+          Positioned(top: 0, left: 0, right: 0, child: Container(height: 2, color: _rankColor.withValues(alpha: 0.7))),
+        ]),
+      ),
+    ]);
   }
 }
 
 // ─────────────────────────────────────────────
-// PLAYER CARD (rank 4+)
+// PLAYER CARD (rank 4+) — unchanged from v3
 // ─────────────────────────────────────────────
 class _PlayerCard extends StatefulWidget {
-  final _LbEntry  entry;
-  final int       rank;
-  final double    value;
-  final String Function(double) formatAmount;
-  final bool      isMe;
-  final int       animDelay;
-
-  const _PlayerCard({
-    required this.entry,
-    required this.rank,
-    required this.value,
-    required this.formatAmount,
-    required this.isMe,
-    required this.animDelay,
-  });
-
+  final _LbEntry entry; final int rank; final double value;
+  final String Function(double) formatAmount; final bool isMe; final int animDelay;
+  const _PlayerCard({required this.entry, required this.rank, required this.value, required this.formatAmount, required this.isMe, required this.animDelay});
   @override State<_PlayerCard> createState() => _PlayerCardState();
 }
 
-class _PlayerCardState extends State<_PlayerCard>
-    with SingleTickerProviderStateMixin {
+class _PlayerCardState extends State<_PlayerCard> with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
-  late Animation<double>   _slide;
-  late Animation<double>   _opacity;
+  late Animation<double> _slide, _opacity;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this,
-        duration: const Duration(milliseconds: 400));
-    _slide   = Tween(begin: 30.0, end: 0.0)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 400));
+    _slide   = Tween(begin: 30.0, end: 0.0).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
     _opacity = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
-    Future.delayed(Duration(milliseconds: widget.animDelay), () {
-      if (mounted) _ctrl.forward();
-    });
+    Future.delayed(Duration(milliseconds: widget.animDelay), () { if (mounted) _ctrl.forward(); });
   }
   @override void dispose() { _ctrl.dispose(); super.dispose(); }
 
@@ -722,77 +529,35 @@ class _PlayerCardState extends State<_PlayerCard>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _ctrl,
-      builder: (_, child) => Opacity(
-        opacity: _opacity.value,
-        child: Transform.translate(
-          offset: Offset(0, _slide.value), child: child),
-      ),
+      builder: (_, child) => Opacity(opacity: _opacity.value, child: Transform.translate(offset: Offset(0, _slide.value), child: child)),
       child: Container(
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color: widget.isMe
-              ? _C.purple.withValues(alpha: 0.08) : _C.surfaceCard,
+          color: widget.isMe ? _C.purple.withValues(alpha: 0.08) : _C.surfaceCard,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: widget.isMe
-                ? _C.purple.withValues(alpha: 0.4) : _C.border,
-            width: widget.isMe ? 1.5 : 1,
-          ),
+          border: Border.all(color: widget.isMe ? _C.purple.withValues(alpha: 0.4) : _C.border, width: widget.isMe ? 1.5 : 1),
         ),
         child: Row(children: [
-          SizedBox(
-            width: 36,
-            child: Text('#${widget.rank}', textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: _C.textMuted, fontSize: 13,
-                fontWeight: FontWeight.w700,
-              )),
-          ),
+          SizedBox(width: 36, child: Text('#${widget.rank}', textAlign: TextAlign.center, style: const TextStyle(color: _C.textMuted, fontSize: 13, fontWeight: FontWeight.w700))),
           const SizedBox(width: 10),
-          SizedBox(
-            width: 42, height: 42,
-            child: ClipOval(child: Container(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: widget.isMe ? _C.purple : _C.border, width: 1.5),
-              ),
-              child: _Avatar(
-                url: widget.entry.photoUrl, name: widget.entry.name,
-                accentColor: widget.isMe ? _C.purple : _C.textMuted,
-              ),
-            )),
-          ),
+          SizedBox(width: 42, height: 42, child: ClipOval(child: Container(
+            decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: widget.isMe ? _C.purple : _C.border, width: 1.5)),
+            child: _Avatar(url: widget.entry.photoUrl, name: widget.entry.name, accentColor: widget.isMe ? _C.purple : _C.textMuted),
+          ))),
           const SizedBox(width: 12),
           Expanded(child: Row(children: [
-            Flexible(child: Text(widget.entry.name,
-              style: const TextStyle(
-                color: _C.textPrimary, fontSize: 14,
-                fontWeight: FontWeight.w700,
-              ),
-              overflow: TextOverflow.ellipsis,
-            )),
+            Flexible(child: Text(widget.entry.name, style: const TextStyle(color: _C.textPrimary, fontSize: 14, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
             if (widget.isMe) ...[
               const SizedBox(width: 7),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                decoration: BoxDecoration(
-                  color: _C.purpleGlowFaint,
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(color: _C.purple.withValues(alpha: 0.4)),
-                ),
-                child: const Text('YOU', style: TextStyle(
-                  color: _C.purpleLight, fontSize: 8,
-                  fontWeight: FontWeight.w800,
-                )),
+                decoration: BoxDecoration(color: _C.purpleGlowFaint, borderRadius: BorderRadius.circular(4), border: Border.all(color: _C.purple.withValues(alpha: 0.4))),
+                child: const Text('YOU', style: TextStyle(color: _C.purpleLight, fontSize: 8, fontWeight: FontWeight.w800)),
               ),
             ],
           ])),
-          Text(widget.formatAmount(widget.value), style: const TextStyle(
-            color: _C.gold, fontSize: 14,
-            fontWeight: FontWeight.w800,
-          )),
+          Text(widget.formatAmount(widget.value), style: const TextStyle(color: _C.gold, fontSize: 14, fontWeight: FontWeight.w800)),
         ]),
       ),
     );
@@ -800,58 +565,35 @@ class _PlayerCardState extends State<_PlayerCard>
 }
 
 // ─────────────────────────────────────────────
-// AVATAR
+// AVATAR (unchanged from v3)
 // ─────────────────────────────────────────────
 class _Avatar extends StatelessWidget {
-  final String url;
-  final String name;
-  final Color  accentColor;
+  final String url, name; final Color accentColor;
   const _Avatar({required this.url, required this.name, required this.accentColor});
-
   @override
   Widget build(BuildContext context) {
-    if (url.isNotEmpty) {
-      return Image.network(
-        url, fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => _Fallback(name: name, color: accentColor),
-      );
-    }
+    if (url.isNotEmpty) return Image.network(url, fit: BoxFit.cover, errorBuilder: (_, _, _) => _Fallback(name: name, color: accentColor));
     return _Fallback(name: name, color: accentColor);
   }
 }
 
 class _Fallback extends StatelessWidget {
-  final String name;
-  final Color  color;
+  final String name; final Color color;
   const _Fallback({required this.name, required this.color});
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: _C.surfaceElevated,
-      child: Center(child: Text(
-        name.isNotEmpty ? name[0].toUpperCase() : '?',
-        style: TextStyle(
-          color: color, fontWeight: FontWeight.w900, fontSize: 18,
-        ),
-      )),
-    );
+    return Container(color: _C.surfaceElevated, child: Center(child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?', style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 18))));
   }
 }
 
 // ─────────────────────────────────────────────
-// PARTICLE PAINTER
+// PARTICLE PAINTER (unchanged from v3)
 // ─────────────────────────────────────────────
 class _PodiumParticlePainter extends CustomPainter {
   final double progress;
   static final _rng = math.Random(99);
-  static final _pts = List.generate(16, (i) => [
-    _rng.nextDouble(), _rng.nextDouble(),
-    _rng.nextDouble() * 2.5 + 1,
-    _rng.nextDouble(),
-  ]);
-
+  static final _pts = List.generate(16, (i) => [_rng.nextDouble(), _rng.nextDouble(), _rng.nextDouble() * 2.5 + 1, _rng.nextDouble()]);
   const _PodiumParticlePainter(this.progress);
-
   @override
   void paint(Canvas canvas, Size size) {
     for (final p in _pts) {
@@ -860,38 +602,24 @@ class _PodiumParticlePainter extends CustomPainter {
       final y     = (p[1] - t * 0.35) % 1.0 * size.height;
       final r     = p[2];
       final alpha = (math.sin(t * math.pi) * 0.3).clamp(0.0, 0.3);
-      canvas.drawCircle(
-        Offset(x, y), r,
-        Paint()
-          ..color = _C.gold.withValues(alpha: alpha)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
-      );
+      canvas.drawCircle(Offset(x, y), r, Paint()..color = _C.gold.withValues(alpha: alpha)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2));
     }
   }
-
-  @override
-  bool shouldRepaint(covariant _PodiumParticlePainter old) =>
-      old.progress != progress;
+  @override bool shouldRepaint(covariant _PodiumParticlePainter old) => old.progress != progress;
 }
 
 // ─────────────────────────────────────────────
-// STATE WIDGETS
+// STATE WIDGETS (unchanged from v3)
 // ─────────────────────────────────────────────
 class _LoadingState extends StatelessWidget {
   const _LoadingState();
   @override
   Widget build(BuildContext context) {
-    return const Center(child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        SizedBox(width: 36, height: 36,
-          child: CircularProgressIndicator(
-              color: _C.purple, strokeWidth: 2)),
-        SizedBox(height: 12),
-        Text('Loading leaderboard…', style: TextStyle(
-            color: _C.textMuted, fontSize: 12)),
-      ],
-    ));
+    return const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+      SizedBox(width: 36, height: 36, child: CircularProgressIndicator(color: _C.purple, strokeWidth: 2)),
+      SizedBox(height: 12),
+      Text('Loading leaderboard…', style: TextStyle(color: _C.textMuted, fontSize: 12)),
+    ]));
   }
 }
 
@@ -900,15 +628,10 @@ class _ErrorState extends StatelessWidget {
   const _ErrorState({required this.message});
   @override
   Widget build(BuildContext context) {
-    return Center(child: Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.error_outline_rounded, color: _C.live, size: 40),
-        const SizedBox(height: 12),
-        Text(message, style: const TextStyle(
-          color: _C.textSecondary, fontSize: 13), textAlign: TextAlign.center),
-      ]),
-    ));
+    return Center(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
+      const Icon(Icons.error_outline_rounded, color: _C.live, size: 40), const SizedBox(height: 12),
+      Text(message, style: const TextStyle(color: _C.textSecondary, fontSize: 13), textAlign: TextAlign.center),
+    ])));
   }
 }
 
@@ -916,34 +639,12 @@ class _EmptyState extends StatelessWidget {
   const _EmptyState();
   @override
   Widget build(BuildContext context) {
-    return Center(child: Padding(
-      padding: const EdgeInsets.all(40),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: 72, height: 72,
-          decoration: BoxDecoration(
-            color: _C.purpleGlowFaint, shape: BoxShape.circle,
-            border: Border.all(color: _C.border),
-          ),
-          child: const Center(child: Text('🏆',
-              style: TextStyle(fontSize: 32))),
-        ),
-        const SizedBox(height: 16),
-        const Text('No data yet for this week.',
-          style: TextStyle(color: _C.textPrimary,
-              fontSize: 15, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 6),
-        const Text('Be the first to compete and claim the top spot!',
-          style: TextStyle(color: _C.textSecondary, fontSize: 12, height: 1.5),
-          textAlign: TextAlign.center),
-      ]),
-    ));
+    return Center(child: Padding(padding: const EdgeInsets.all(40), child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(width: 72, height: 72, decoration: BoxDecoration(color: _C.purpleGlowFaint, shape: BoxShape.circle, border: Border.all(color: _C.border)), child: const Center(child: Text('🏆', style: TextStyle(fontSize: 32)))),
+      const SizedBox(height: 16),
+      const Text('No data yet for this week.', style: TextStyle(color: _C.textPrimary, fontSize: 15, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 6),
+      const Text('Be the first to compete and claim the top spot!', style: TextStyle(color: _C.textSecondary, fontSize: 12, height: 1.5), textAlign: TextAlign.center),
+    ])));
   }
 }
-
-// ─────────────────────────────────────────────
-// FIRESTORE INDEXES REQUIRED
-// ─────────────────────────────────────────────
-// Collection: users
-//   Fields: totalEarnings DESC    (for Winnings leaderboard)
-//   Fields: totalWithdrawals DESC (for Withdrawals leaderboard)

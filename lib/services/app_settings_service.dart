@@ -1,31 +1,27 @@
 // lib/services/app_settings_service.dart
 // ─────────────────────────────────────────────
-// SHADOW STORM — App Settings Service (Phase P1)
+// SHADOW STORM — App Settings Service (Phase F1)
 //
-// Player-app counterpart of admin_settings_service.dart.
-// Reads config/admin_settings and exposes it to the player app.
+// Changes from Phase P1:
+//   PRIORITY 3 — MaintenanceGuard is now used by ALL 5 screens:
+//     HomeScreen, EventsScreen, WalletScreen, ProfileScreen,
+//     TournamentDetailsScreen — each wraps their Scaffold with
+//     MaintenanceGuard (see individual screen files).
+//     This service provides the single shared settings stream.
 //
-// Features:
-//   • Single realtime stream for admin settings (ONE listener for whole app)
-//   • Lightweight cached one-time reads for non-critical settings
-//   • maintenanceMode / walletFrozen signals exposed as ValueNotifiers
-//     so any widget can react without StreamBuilder nesting
-//   • NEVER writes to admin_settings — read-only from player side
+//   PRIORITY 4 — walletActionsAllowed and tournamentJoinAllowed getters
+//     added to AppSettings for clean checks across screens.
+//     walletFrozen blocks deposits, withdrawals, AND tournament registration.
 //
-// Architecture:
-//   • Single Firestore listener cached at service level
-//   • All widgets share the same stream (no duplicate listeners)
-//   • CacheService integration for offline resilience
+//   All original streams, notifiers, and methods kept intact.
 // ─────────────────────────────────────────────
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-// import 'package:flutter/foundation.dart';
 import 'cache_service.dart';
 
 // ─────────────────────────────────────────────
 // PLAYER-SIDE SETTINGS MODEL
-// Only fields the player app needs — not the full AdminSettings model.
 // ─────────────────────────────────────────────
 
 class AppSettings {
@@ -80,20 +76,43 @@ class AppSettings {
     );
   }
 
-  /// Whether wallet actions (deposit/withdraw) are allowed.
+  // ── PRIORITY 4: Wallet freeze checks ────────
+
+  /// True when deposits AND withdrawals are allowed.
+  /// Blocked by walletFrozen OR maintenanceMode.
   bool get walletActionsAllowed => !walletFrozen && !maintenanceMode;
 
-  /// Whether any player action should be blocked.
+  /// True when deposit is specifically allowed.
+  bool get depositAllowed => !walletFrozen && !maintenanceMode;
+
+  /// True when withdrawal is specifically allowed.
+  bool get withdrawalAllowed => !walletFrozen && !maintenanceMode;
+
+  /// PRIORITY 4: Tournament join is also blocked when walletFrozen.
+  /// (entry fee can't be deducted if wallet is frozen)
+  bool get tournamentJoinAllowed => !walletFrozen && !maintenanceMode;
+
+  /// Whether any player action should be blocked (maintenance only).
   bool get actionsBlocked => maintenanceMode;
 
-  /// Human-readable approval window string.
+  /// Human-readable freeze/maintenance reason to show to the user.
+  String get blockReason {
+    if (maintenanceMode) return maintenanceMessage;
+    if (walletFrozen) {
+      return walletFreezeReason.isNotEmpty
+          ? walletFreezeReason
+          : 'Wallet operations are temporarily suspended.';
+    }
+    return '';
+  }
+
   String get approvalWindowDisplay {
-    String _fmt(int h) {
+    String fmt(int h) {
       final period = h >= 12 ? 'PM' : 'AM';
       final h12    = h > 12 ? h - 12 : (h == 0 ? 12 : h);
       return '$h12 $period';
     }
-    return '${_fmt(approvalWindowStart)} – ${_fmt(approvalWindowEnd)}';
+    return '${fmt(approvalWindowStart)} – ${fmt(approvalWindowEnd)}';
   }
 }
 
@@ -108,18 +127,14 @@ class AppSettingsService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   static const _docPath = 'config/admin_settings';
 
-  // ── Shared stream (one listener for the whole app) ──
   Stream<AppSettings>? _settingsStream;
 
-  // ── ValueNotifiers for lightweight widget reactions ──
-  final ValueNotifier<bool>        maintenanceNotifier = ValueNotifier(false);
+  final ValueNotifier<bool>        maintenanceNotifier  = ValueNotifier(false);
   final ValueNotifier<bool>        walletFrozenNotifier = ValueNotifier(false);
-  final ValueNotifier<AppSettings> settingsNotifier =
-      ValueNotifier(const AppSettings());
+  final ValueNotifier<AppSettings> settingsNotifier     = ValueNotifier(const AppSettings());
 
   // ─────────────────────────────────────────────
-  // REALTIME STREAM (shared across app)
-  // Call this once and subscribe multiple widgets to the same stream.
+  // REALTIME STREAM (shared — one listener for entire app)
   // ─────────────────────────────────────────────
 
   Stream<AppSettings> get settingsStream {
@@ -135,7 +150,7 @@ class AppSettingsService {
           _updateCache(settings);
           return settings;
         })
-        .asBroadcastStream(); // shared — no duplicate Firestore reads
+        .asBroadcastStream();
 
     return _settingsStream!;
   }
@@ -145,7 +160,6 @@ class AppSettingsService {
   // ─────────────────────────────────────────────
 
   Future<AppSettings> getSettings({bool forceRefresh = false}) async {
-    // Return from cache if available and not forcing refresh
     if (!forceRefresh) {
       final cached = CacheService.instance.get<Map<String, dynamic>>(
         CacheKey.adminSettings,
@@ -162,7 +176,6 @@ class AppSettingsService {
       return settings;
     } catch (e) {
       debugPrint('[AppSettingsService] getSettings error: $e');
-      // Return cached or defaults on error
       final cached = CacheService.instance.get<Map<String, dynamic>>(
         CacheKey.adminSettings,
       );
@@ -171,10 +184,9 @@ class AppSettingsService {
   }
 
   // ─────────────────────────────────────────────
-  // MAINTENANCE CHECK (very lightweight)
+  // FAST MAINTENANCE CHECK
   // ─────────────────────────────────────────────
 
-  /// Fast maintenance check — uses cache if available, falls back to Firestore.
   Future<bool> isMaintenanceMode() async {
     final cached = CacheService.instance.get<bool>(CacheKey.maintenanceMode);
     if (cached != null) return cached;
@@ -187,12 +199,12 @@ class AppSettingsService {
       CacheService.instance.set(CacheKey.maintenanceMode, value);
       return value;
     } catch (_) {
-      return false; // default: allow access on error
+      return false;
     }
   }
 
   // ─────────────────────────────────────────────
-  // INTERNAL HELPERS
+  // INTERNAL
   // ─────────────────────────────────────────────
 
   void _updateNotifiers(AppSettings settings) {
@@ -222,10 +234,15 @@ class AppSettingsService {
 
 // ─────────────────────────────────────────────
 // MAINTENANCE GUARD WIDGET
-// Wrap any screen with this to auto-show maintenance UI
-// when admin enables maintenanceMode.
+//
+// PRIORITY 3 (F1): Wrap ALL of these screens with this widget:
+//   HomeScreen, EventsScreen, WalletScreen,
+//   ProfileScreen, TournamentDetailsScreen.
+//
+// Usage: return MaintenanceGuard(child: Scaffold(...));
+//
+// Only LoginScreen must NOT be wrapped.
 // ─────────────────────────────────────────────
-
 
 class MaintenanceGuard extends StatelessWidget {
   final Widget child;
@@ -247,6 +264,38 @@ class MaintenanceGuard extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────
+// WALLET FREEZE GUARD WIDGET
+//
+// PRIORITY 4 (F1): Use this inside WalletScreen to gate
+// deposit/withdrawal actions.
+// Usage: WalletFreezeGuard(child: _DepositSection(...))
+// ─────────────────────────────────────────────
+
+class WalletFreezeGuard extends StatelessWidget {
+  final Widget child;
+
+  const WalletFreezeGuard({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<AppSettings>(
+      stream: AppSettingsService.instance.settingsStream,
+      builder: (context, snap) {
+        final settings = snap.data ?? const AppSettings();
+        if (settings.walletFrozen) {
+          return _WalletFrozenScreen(reason: settings.walletFreezeReason);
+        }
+        return child;
+      },
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// MAINTENANCE SCREEN
+// ─────────────────────────────────────────────
+
 class _MaintenanceScreen extends StatelessWidget {
   final String message;
   const _MaintenanceScreen({required this.message});
@@ -261,10 +310,8 @@ class _MaintenanceScreen extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Animated icon
               Container(
-                width: 88,
-                height: 88,
+                width: 88, height: 88,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: const Color(0xFF9D55FF).withValues(alpha: 0.12),
@@ -274,18 +321,15 @@ class _MaintenanceScreen extends StatelessWidget {
                 ),
                 child: const Icon(
                   Icons.construction_rounded,
-                  color: Color(0xFF9D55FF),
-                  size: 40,
+                  color: Color(0xFF9D55FF), size: 40,
                 ),
               ),
               const SizedBox(height: 28),
               const Text(
                 'UNDER MAINTENANCE',
                 style: TextStyle(
-                  color: Color(0xFFEDE0FF),
-                  fontSize: 20,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 2,
+                  color: Color(0xFFEDE0FF), fontSize: 20,
+                  fontWeight: FontWeight.w900, letterSpacing: 2,
                 ),
                 textAlign: TextAlign.center,
               ),
@@ -300,9 +344,7 @@ class _MaintenanceScreen extends StatelessWidget {
                 child: Text(
                   message,
                   style: const TextStyle(
-                    color: Color(0xFF9B8DC0),
-                    fontSize: 14,
-                    height: 1.6,
+                    color: Color(0xFF9B8DC0), fontSize: 14, height: 1.6,
                   ),
                   textAlign: TextAlign.center,
                 ),
@@ -320,12 +362,87 @@ class _MaintenanceScreen extends StatelessWidget {
                 child: const Text(
                   'We\'ll be back shortly. Follow us on Discord for updates.',
                   style: TextStyle(
-                    color: Color(0xFF9B8DC0),
-                    fontSize: 12,
-                    height: 1.5,
+                    color: Color(0xFF9B8DC0), fontSize: 12, height: 1.5,
                   ),
                   textAlign: TextAlign.center,
                 ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// WALLET FROZEN SCREEN
+// ─────────────────────────────────────────────
+
+class _WalletFrozenScreen extends StatelessWidget {
+  final String reason;
+  const _WalletFrozenScreen({required this.reason});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF06040E),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 88, height: 88,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFFFAA22).withValues(alpha: 0.12),
+                  border: Border.all(
+                    color: const Color(0xFFFFAA22).withValues(alpha: 0.3),
+                  ),
+                ),
+                child: const Icon(
+                  Icons.ac_unit_rounded,
+                  color: Color(0xFFFFAA22), size: 40,
+                ),
+              ),
+              const SizedBox(height: 28),
+              const Text(
+                'WALLET FROZEN',
+                style: TextStyle(
+                  color: Color(0xFFEDE0FF), fontSize: 20,
+                  fontWeight: FontWeight.w900, letterSpacing: 2,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF130F22),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: const Color(0xFFFFAA22).withValues(alpha: 0.3),
+                  ),
+                ),
+                child: Text(
+                  reason.isNotEmpty
+                      ? reason
+                      : 'Wallet operations are temporarily suspended by the admin.',
+                  style: const TextStyle(
+                    color: Color(0xFF9B8DC0), fontSize: 14, height: 1.6,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'You can still browse tournaments and the app.\nDeposits, withdrawals, and tournament entry are disabled.',
+                style: TextStyle(
+                  color: Color(0xFF5A4E80), fontSize: 12, height: 1.6,
+                ),
+                textAlign: TextAlign.center,
               ),
             ],
           ),

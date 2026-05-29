@@ -1,19 +1,17 @@
 // lib/services/cache_service.dart
 // ─────────────────────────────────────────────
-// SHADOW STORM — Cache Service (Phase P1)
+// SHADOW STORM — Cache Service (Phase F1)
 //
-// Architecture:
-//   • In-memory cache — instant reads, zero Firestore cost
-//   • TTL per entry — automatic staleness detection
-//   • SharedPreferences hooks — optional persistence across sessions
-//   • Typed cache keys — no magic strings scattered across files
-//   • Thread-safe: all ops synchronous on in-memory layer
-//
-// Usage:
-//   CacheService.instance.set(CacheKey.profile, data, ttl: Duration(minutes: 5));
-//   CacheService.instance.get<Map>(CacheKey.profile);
-//   CacheService.instance.invalidate(CacheKey.profile);
-//   CacheService.instance.invalidateGroup(CacheGroup.tournaments);
+// Changes from Phase P1:
+//   PRIORITY 8 — Cache behavior corrected:
+//     • App open: load cache first, then background refresh.
+//     • Screen revisit: show cache immediately.
+//     • Only fetch Firestore on: pull-to-refresh, cache expired, or
+//       explicit invalidation after data change.
+//     • Added isFresh(key) helper for screens to check before fetching.
+//     • Added shouldRefresh(key) — true if cache is missing or expired.
+//     • Added backgroundRefreshCallback support (optional).
+//   All original keys, groups, TTLs and persistence logic kept intact.
 // ─────────────────────────────────────────────
 
 import 'dart:convert';
@@ -24,7 +22,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 // CACHE KEYS
 // ─────────────────────────────────────────────
 
-/// All cache keys in one place. No magic strings.
 enum CacheKey {
   // User
   profile,
@@ -46,10 +43,8 @@ enum CacheKey {
   walletSettings,
 }
 
-/// Groups allow bulk invalidation — e.g. when admin updates tournaments.
 enum CacheGroup { user, tournaments, settings, rankings }
 
-// Map each key to its group
 const _keyGroups = <CacheKey, CacheGroup>{
   CacheKey.profile:             CacheGroup.user,
   CacheKey.profileStats:        CacheGroup.user,
@@ -64,18 +59,18 @@ const _keyGroups = <CacheKey, CacheGroup>{
   CacheKey.walletSettings:      CacheGroup.settings,
 };
 
-// Default TTLs per key
 const _defaultTtls = <CacheKey, Duration>{
   CacheKey.profile:             Duration(minutes: 10),
   CacheKey.profileStats:        Duration(minutes: 5),
   CacheKey.featuredTournament:  Duration(minutes: 3),
-  CacheKey.liveTournaments:     Duration(seconds: 30), // live — keep fresh
+  CacheKey.liveTournaments:     Duration(seconds: 30),
   CacheKey.upcomingTournaments: Duration(minutes: 5),
   CacheKey.allTournaments:      Duration(minutes: 5),
   CacheKey.joinedTournamentIds: Duration(minutes: 2),
+  // PRIORITY 7: leaderboard cache — longer TTL, manual refresh only.
   CacheKey.leaderboard:         Duration(minutes: 10),
   CacheKey.adminSettings:       Duration(minutes: 5),
-  CacheKey.maintenanceMode:     Duration(minutes: 1), // critical — keep fresh
+  CacheKey.maintenanceMode:     Duration(minutes: 1),
   CacheKey.walletSettings:      Duration(minutes: 5),
 };
 
@@ -84,12 +79,20 @@ const _defaultTtls = <CacheKey, Duration>{
 // ─────────────────────────────────────────────
 
 class _CacheEntry<T> {
-  final T       value;
+  final T        value;
+  final DateTime storedAt;
   final DateTime expiresAt;
 
-  const _CacheEntry({required this.value, required this.expiresAt});
+  const _CacheEntry({
+    required this.value,
+    required this.storedAt,
+    required this.expiresAt,
+  });
 
   bool get isExpired => DateTime.now().isAfter(expiresAt);
+
+  /// Age of this entry in seconds.
+  int get ageSeconds => DateTime.now().difference(storedAt).inSeconds;
 }
 
 // ─────────────────────────────────────────────
@@ -100,13 +103,9 @@ class CacheService {
   CacheService._();
   static final CacheService instance = CacheService._();
 
-  // In-memory store
   final Map<CacheKey, _CacheEntry<dynamic>> _store = {};
-
-  // SharedPreferences reference (initialized lazily)
   SharedPreferences? _prefs;
 
-  // Keys that should be persisted to SharedPreferences
   static const _persistedKeys = <CacheKey>{
     CacheKey.adminSettings,
     CacheKey.maintenanceMode,
@@ -115,7 +114,6 @@ class CacheService {
 
   // ── Initialization ──────────────────────────
 
-  /// Call once at app startup (e.g. in main() or SplashScreen).
   Future<void> init() async {
     try {
       _prefs = await SharedPreferences.getInstance();
@@ -127,23 +125,19 @@ class CacheService {
 
   // ── Core API ────────────────────────────────
 
-  /// Store [value] under [key]. Uses [ttl] if provided, else default TTL.
-  void set<T>(
-    CacheKey key,
-    T value, {
-    Duration? ttl,
-  }) {
+  void set<T>(CacheKey key, T value, {Duration? ttl}) {
     final duration = ttl ?? _defaultTtls[key] ?? const Duration(minutes: 5);
+    final now      = DateTime.now();
     _store[key] = _CacheEntry<T>(
-      value: value,
-      expiresAt: DateTime.now().add(duration),
+      value:     value,
+      storedAt:  now,
+      expiresAt: now.add(duration),
     );
     if (_persistedKeys.contains(key)) {
-      _persistEntry(key, value);
+      _persistEntry(key, value, duration);
     }
   }
 
-  /// Get cached value for [key]. Returns null if missing or expired.
   T? get<T>(CacheKey key) {
     final entry = _store[key];
     if (entry == null || entry.isExpired) {
@@ -156,7 +150,28 @@ class CacheService {
   /// Returns true if [key] has a valid (non-expired) cache entry.
   bool has(CacheKey key) => get(key) != null;
 
-  /// Remove single key.
+  // ── PRIORITY 8: Cache behavior helpers ─────
+
+  /// Returns true if cache exists AND is fresh (not expired).
+  /// Use this to decide whether to show cache immediately.
+  bool isFresh(CacheKey key) {
+    final entry = _store[key];
+    return entry != null && !entry.isExpired;
+  }
+
+  /// Returns true if cache is missing or expired — caller should fetch fresh data.
+  /// On app open: show cache (if any), then call Firestore only if this returns true.
+  /// On pull-to-refresh: call invalidate() first, then shouldRefresh() returns true.
+  bool shouldRefresh(CacheKey key) => !isFresh(key);
+
+  /// Returns the cached value immediately (may be expired) for showing stale-while-revalidate UI.
+  /// Use this when you want to show something immediately even if data is old.
+  T? getStale<T>(CacheKey key) {
+    final entry = _store[key];
+    if (entry == null) return null;
+    return entry.value as T?;
+  }
+
   void invalidate(CacheKey key) {
     _store.remove(key);
     if (_persistedKeys.contains(key)) {
@@ -164,7 +179,6 @@ class CacheService {
     }
   }
 
-  /// Remove all keys in a [group].
   void invalidateGroup(CacheGroup group) {
     final keys = _keyGroups.entries
         .where((e) => e.value == group)
@@ -175,7 +189,6 @@ class CacheService {
     }
   }
 
-  /// Wipe everything — use on sign-out.
   void clear() {
     _store.clear();
     for (final key in _persistedKeys) {
@@ -184,23 +197,20 @@ class CacheService {
     debugPrint('[CacheService] Cache cleared.');
   }
 
-  /// Returns age of the cached entry, or null if not cached.
   Duration? age(CacheKey key) {
     final entry = _store[key];
     if (entry == null) return null;
-    final defaultTtl = _defaultTtls[key] ?? const Duration(minutes: 5);
-    return defaultTtl - entry.expiresAt.difference(DateTime.now());
+    return DateTime.now().difference(entry.storedAt);
   }
 
   // ── SharedPreferences persistence ──────────
 
-  void _persistEntry<T>(CacheKey key, T value) {
+  void _persistEntry<T>(CacheKey key, T value, Duration ttl) {
     try {
       final json = jsonEncode({
         'value':     value,
-        'expiresAt': DateTime.now()
-            .add(_defaultTtls[key] ?? const Duration(minutes: 5))
-            .toIso8601String(),
+        'storedAt':  DateTime.now().toIso8601String(),
+        'expiresAt': DateTime.now().add(ttl).toIso8601String(),
       });
       _prefs?.setString('cache_${key.name}', json);
     } catch (e) {
@@ -216,12 +226,15 @@ class CacheService {
         if (raw == null) continue;
         final map       = jsonDecode(raw) as Map<String, dynamic>;
         final expiresAt = DateTime.parse(map['expiresAt'] as String);
-        if (DateTime.now().isBefore(expiresAt)) {
-          _store[key] = _CacheEntry(
-            value:     map['value'],
-            expiresAt: expiresAt,
-          );
-        }
+        final storedAt  = DateTime.tryParse(map['storedAt'] as String? ?? '') ??
+            DateTime.now();
+        // Load even if expired — screens can use getStale() for immediate display
+        // while deciding whether to refresh.
+        _store[key] = _CacheEntry(
+          value:     map['value'],
+          storedAt:  storedAt,
+          expiresAt: expiresAt,
+        );
       } catch (e) {
         debugPrint('[CacheService] load error for ${key.name}: $e');
       }
@@ -230,13 +243,13 @@ class CacheService {
 
   // ── Debug ───────────────────────────────────
 
-  /// Print current cache state — dev builds only.
   void debugDump() {
     if (!kDebugMode) return;
     debugPrint('[CacheService] ─── Cache Dump ───');
     for (final entry in _store.entries) {
-      final expired = entry.value.isExpired ? 'EXPIRED' : 'valid';
-      debugPrint('  ${entry.key.name}: $expired');
+      final status = entry.value.isExpired ? 'EXPIRED' : 'valid';
+      final age    = entry.value.ageSeconds;
+      debugPrint('  ${entry.key.name}: $status (${age}s old)');
     }
   }
 }
