@@ -1,6 +1,7 @@
 // lib/admin/navigation/admin_nav_model.dart
 // ─────────────────────────────────────────────
 // SHADOW STORM — Admin Navigation Model
+// F2: Badge counts for pending items
 // ─────────────────────────────────────────────
 
 import 'package:flutter/material.dart';
@@ -93,13 +94,62 @@ const kAdminNavItems = [
     route:       '/admin/settings',
     accentColor: Color(0xFF9B8DC0),
   ),
+  AdminNavItem(
+    id:          'tools',
+    label:       'System Tools',
+    icon:        Icons.build_outlined,
+    iconActive:  Icons.build_rounded,
+    route:       '/admin/tools',
+    accentColor: Color(0xFF44CCFF),
+    isDividerBefore: true,
+  ),
 ];
+
+// ─────────────────────────────────────────────
+// BADGE COUNTS MODEL
+// ─────────────────────────────────────────────
+class AdminNavBadgeCounts extends ChangeNotifier {
+  int _pendingDeposits    = 0;
+  int _pendingWithdrawals = 0;
+  int _tournamentAlerts   = 0;  // missing credentials + status issues
+
+  int get pendingDeposits    => _pendingDeposits;
+  int get pendingWithdrawals => _pendingWithdrawals;
+  int get tournamentAlerts   => _tournamentAlerts;
+
+  int get totalPending => _pendingDeposits + _pendingWithdrawals;
+
+  void update({
+    required int pendingDeposits,
+    required int pendingWithdrawals,
+    required int tournamentAlerts,
+  }) {
+    _pendingDeposits    = pendingDeposits;
+    _pendingWithdrawals = pendingWithdrawals;
+    _tournamentAlerts   = tournamentAlerts;
+    notifyListeners();
+  }
+
+  String? badgeFor(String navId) {
+    switch (navId) {
+      case 'deposits':
+        return _pendingDeposits > 0 ? '$_pendingDeposits' : null;
+      case 'withdrawals':
+        return _pendingWithdrawals > 0 ? '$_pendingWithdrawals' : null;
+      case 'tournaments':
+        return _tournamentAlerts > 0 ? '$_tournamentAlerts' : null;
+      default:
+        return null;
+    }
+  }
+}
 
 // ─────────────────────────────────────────────
 // NAV STATE
 // ─────────────────────────────────────────────
 class AdminNavState extends ChangeNotifier {
   String _activeId = 'dashboard';
+  final AdminNavBadgeCounts badges = AdminNavBadgeCounts();
 
   String get activeId => _activeId;
 
@@ -111,5 +161,11 @@ class AdminNavState extends ChangeNotifier {
       _activeId = id;
       notifyListeners();
     }
+  }
+
+  @override
+  void dispose() {
+    badges.dispose();
+    super.dispose();
   }
 }

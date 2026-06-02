@@ -1,8 +1,7 @@
 // lib/admin/services/admin_user_service.dart
 // ─────────────────────────────────────────────
 // SHADOW STORM — Admin User Service
-// Atomic balance adjustment, admin flag toggle, user data fetch
-// NEVER import this from the main app — admin-only
+// F2: readableId field, search by readable ID, expanded AdminUserData
 // ─────────────────────────────────────────────
 
 import 'dart:convert';
@@ -22,6 +21,7 @@ class AdminUserData {
   final String? photoUrl;
   final String? ign;
   final String? gameUid;
+  final String? readableId;          // F2: SSP-000001 format
   final bool    isAdmin;
   final bool    isFrozen;
   final double  walletBalance;
@@ -31,6 +31,7 @@ class AdminUserData {
   final int     wins;
   final int     tournamentsPlayed;
   final Timestamp? createdAt;
+  final String? adminNote;
 
   AdminUserData({
     required this.uid,
@@ -39,6 +40,7 @@ class AdminUserData {
     this.photoUrl,
     this.ign,
     this.gameUid,
+    this.readableId,
     required this.isAdmin,
     required this.isFrozen,
     required this.walletBalance,
@@ -48,36 +50,47 @@ class AdminUserData {
     required this.wins,
     required this.tournamentsPlayed,
     this.createdAt,
+    this.adminNote,
   });
 
   factory AdminUserData.fromDoc(DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>? ?? {};
     return AdminUserData(
       uid:              doc.id,
-      name:             (d['name']  as String?) ?? 'Unknown',
-      email:            (d['email'] as String?) ?? '',
-      photoUrl:         d['photoUrl']  as String?,
-      ign:              d['ign']       as String?,
-      gameUid:          d['gameUid']   as String?,
-      isAdmin:          (d['isAdmin']  as bool?) ?? false,
-      isFrozen:         (d['isFrozen'] as bool?) ?? false,
+      name:             (d['name']        as String?) ?? 'Unknown',
+      email:            (d['email']       as String?) ?? '',
+      photoUrl:         d['photoUrl']     as String?,
+      ign:              d['ign']          as String?,
+      gameUid:          d['gameUid']      as String?,
+      readableId:       d['readableId']   as String?,
+      isAdmin:          (d['isAdmin']     as bool?) ?? false,
+      isFrozen:         (d['isFrozen']    as bool?) ?? false,
       walletBalance:    (d['walletBalance']    as num?)?.toDouble() ?? 0.0,
       totalDeposits:    (d['totalDeposits']    as num?)?.toDouble() ?? 0.0,
       totalWithdrawals: (d['totalWithdrawals'] as num?)?.toDouble() ?? 0.0,
       totalEarnings:    (d['totalEarnings']    as num?)?.toDouble() ?? 0.0,
-      wins:             (d['wins']             as int?) ?? 0,
-      tournamentsPlayed:(d['tournamentsPlayed'] as int?) ?? 0,
+      wins:             (d['wins']             as num?)?.toInt()    ?? 0,
+      tournamentsPlayed:(d['tournamentsPlayed'] as num?)?.toInt()   ?? 0,
       createdAt:        d['createdAt'] as Timestamp?,
+      adminNote:        d['adminNote'] as String?,
     );
+  }
+
+  /// Display label shown in tables: "Name · SSP-000001"
+  String get displayLabel {
+    if (readableId != null && readableId!.isNotEmpty) {
+      return '$name · $readableId';
+    }
+    return name;
   }
 }
 
 class AdminTransactionRecord {
-  final String   id;
-  final String   type;
-  final double   amount;
-  final String   status;
-  final String   description;
+  final String    id;
+  final String    type;
+  final double    amount;
+  final String    status;
+  final String    description;
   final Timestamp createdAt;
 
   AdminTransactionRecord({
@@ -103,7 +116,7 @@ class AdminTransactionRecord {
 }
 
 class AdminUserWithHistory {
-  final AdminUserData               user;
+  final AdminUserData                user;
   final List<AdminTransactionRecord> transactions;
 
   AdminUserWithHistory({required this.user, required this.transactions});
@@ -118,14 +131,33 @@ class AdminUserService {
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
+  String get _adminUid   => AdminAuthService.instance.currentUser?.uid   ?? 'unknown';
+  String get _adminEmail => AdminAuthService.instance.currentUser?.email ?? 'Unknown Admin';
+
+  // ──────────────────────────────────────────────────────
+  // SEARCH BY READABLE ID
+  // ──────────────────────────────────────────────────────
+  Future<AdminUserData?> getUserByReadableId(String readableId) async {
+    final snap = await _db
+        .collection('users')
+        .where('readableId', isEqualTo: readableId.trim().toUpperCase())
+        .limit(1)
+        .get();
+    if (snap.docs.isEmpty) return null;
+    return AdminUserData.fromDoc(snap.docs.first);
+  }
+
+  // ──────────────────────────────────────────────────────
+  // SEARCH BY FIREBASE UID
+  // ──────────────────────────────────────────────────────
+  Future<AdminUserData?> getUserByUid(String uid) async {
+    final doc = await _db.collection('users').doc(uid.trim()).get();
+    if (!doc.exists) return null;
+    return AdminUserData.fromDoc(doc);
+  }
+
   // ──────────────────────────────────────────────────────
   // ADJUST BALANCE (atomic)
-  // delta > 0 = credit, delta < 0 = debit
-  //   1. Validate resulting balance >= 0 if debit
-  //   2. Update walletBalance
-  //   3. Create transaction record
-  //   4. Create admin_logs entry
-  //   5. Fire Discord webhook
   // ──────────────────────────────────────────────────────
   Future<void> adjustBalance({
     required String uid,
@@ -133,17 +165,11 @@ class AdminUserService {
     required double delta,
     required String reason,
   }) async {
-    if (reason.trim().isEmpty) {
-      throw Exception('Adjustment reason is required.');
-    }
+    if (reason.trim().isEmpty) throw Exception('Adjustment reason is required.');
 
     final userRef = _db.collection('users').doc(uid);
     final txnRef  = userRef.collection('transactions').doc();
     final logRef  = _db.collection('admin_logs').doc();
-
-    final adminUser  = AdminAuthService.instance.currentUser;
-    final adminUid   = adminUser?.uid ?? 'unknown';
-    final adminEmail = adminUser?.email ?? 'Unknown Admin';
 
     await _db.runTransaction((txn) async {
       final snap    = await txn.get(userRef);
@@ -152,46 +178,42 @@ class AdminUserService {
 
       if (newBal < 0) {
         throw Exception(
-            'Adjustment would result in negative balance. Current: ₹${current.toStringAsFixed(2)}, Delta: ₹${delta.toStringAsFixed(2)}');
+            'Adjustment would result in negative balance. '
+            'Current: ₹${current.toStringAsFixed(2)}, Delta: ₹${delta.toStringAsFixed(2)}');
       }
 
       final isCredit = delta >= 0;
 
-      txn.update(userRef, {
-        'walletBalance': FieldValue.increment(delta),
-      });
+      txn.update(userRef, {'walletBalance': FieldValue.increment(delta)});
 
       txn.set(txnRef, {
         'type':        isCredit ? 'deposit' : 'withdrawal',
         'amount':      delta.abs(),
         'status':      'completed',
         'description': 'Admin adjustment: ${reason.trim()}',
+        'isCredit':    isCredit,
         'createdAt':   FieldValue.serverTimestamp(),
       });
 
       txn.set(logRef, {
-        'action':      'balance_adjusted',
-        'adminUid':    adminUid,
-        'adminEmail':  adminEmail,
-        'targetUid':   uid,
+        'action':     'balance_adjusted',
+        'adminUid':   _adminUid,
+        'adminEmail': _adminEmail,
+        'targetUid':  uid,
         'details': {
-          'playerName':  playerName,
-          'delta':       delta,
-          'before':      current,
-          'after':       newBal,
-          'reason':      reason.trim(),
+          'playerName': playerName,
+          'delta':      delta,
+          'before':     current,
+          'after':      newBal,
+          'reason':     reason.trim(),
         },
         'createdAt': FieldValue.serverTimestamp(),
       });
     });
 
     _fireAdjustWebhook(
-      playerName:  playerName,
-      uid:         uid,
-      delta:       delta,
-      reason:      reason.trim(),
-      adminEmail:  adminEmail,
-    );
+        playerName: playerName, uid: uid,
+        delta: delta, reason: reason.trim(), adminEmail: _adminEmail);
   }
 
   // ──────────────────────────────────────────────────────
@@ -202,37 +224,25 @@ class AdminUserService {
     required String playerName,
     required bool   isAdmin,
   }) async {
-    final adminUser  = AdminAuthService.instance.currentUser;
-    final adminUid   = adminUser?.uid ?? 'unknown';
-    final adminEmail = adminUser?.email ?? 'Unknown Admin';
-
     final userRef = _db.collection('users').doc(uid);
     final logRef  = _db.collection('admin_logs').doc();
-
-    final batch = _db.batch();
+    final batch   = _db.batch();
 
     batch.update(userRef, {'isAdmin': isAdmin});
 
     batch.set(logRef, {
-      'action':      isAdmin ? 'admin_promoted' : 'admin_demoted',
-      'adminUid':    adminUid,
-      'adminEmail':  adminEmail,
-      'targetUid':   uid,
-      'details': {
-        'playerName': playerName,
-        'isAdmin':    isAdmin,
-      },
-      'createdAt': FieldValue.serverTimestamp(),
+      'action':     isAdmin ? 'admin_promoted' : 'admin_demoted',
+      'adminUid':   _adminUid,
+      'adminEmail': _adminEmail,
+      'targetUid':  uid,
+      'details': {'playerName': playerName, 'isAdmin': isAdmin},
+      'createdAt':  FieldValue.serverTimestamp(),
     });
 
     await batch.commit();
-
     _fireAdminToggleWebhook(
-      playerName:  playerName,
-      uid:         uid,
-      promoted:    isAdmin,
-      adminEmail:  adminEmail,
-    );
+        playerName: playerName, uid: uid,
+        promoted: isAdmin, adminEmail: _adminEmail);
   }
 
   // ──────────────────────────────────────────────────────
@@ -243,27 +253,19 @@ class AdminUserService {
     required String playerName,
     required bool   frozen,
   }) async {
-    final adminUser  = AdminAuthService.instance.currentUser;
-    final adminUid   = adminUser?.uid ?? 'unknown';
-    final adminEmail = adminUser?.email ?? 'Unknown Admin';
-
     final userRef = _db.collection('users').doc(uid);
     final logRef  = _db.collection('admin_logs').doc();
-
-    final batch = _db.batch();
+    final batch   = _db.batch();
 
     batch.update(userRef, {'isFrozen': frozen});
 
     batch.set(logRef, {
-      'action':      frozen ? 'account_frozen' : 'account_unfrozen',
-      'adminUid':    adminUid,
-      'adminEmail':  adminEmail,
-      'targetUid':   uid,
-      'details': {
-        'playerName': playerName,
-        'frozen':     frozen,
-      },
-      'createdAt': FieldValue.serverTimestamp(),
+      'action':     frozen ? 'account_frozen' : 'account_unfrozen',
+      'adminUid':   _adminUid,
+      'adminEmail': _adminEmail,
+      'targetUid':  uid,
+      'details': {'playerName': playerName, 'frozen': frozen},
+      'createdAt':  FieldValue.serverTimestamp(),
     });
 
     await batch.commit();
@@ -283,50 +285,42 @@ class AdminUserService {
     final userDoc = results[0] as DocumentSnapshot;
     final txnSnap = results[1] as QuerySnapshot;
 
-    final user = AdminUserData.fromDoc(userDoc);
-    final txns = txnSnap.docs
-        .map((d) => AdminTransactionRecord.fromDoc(d))
-        .toList();
-
-    return AdminUserWithHistory(user: user, transactions: txns);
+    return AdminUserWithHistory(
+      user:         AdminUserData.fromDoc(userDoc),
+      transactions: txnSnap.docs
+          .map((d) => AdminTransactionRecord.fromDoc(d))
+          .toList(),
+    );
   }
 
   // ──────────────────────────────────────────────────────
   // ADD ADMIN NOTE
   // ──────────────────────────────────────────────────────
-  Future<void> addAdminNote({
-    required String uid,
-    required String note,
-  }) async {
-    final adminUser  = AdminAuthService.instance.currentUser;
-    final adminUid   = adminUser?.uid ?? 'unknown';
-    final adminEmail = adminUser?.email ?? 'Unknown Admin';
-
+  Future<void> addAdminNote({required String uid, required String note}) async {
     final userRef = _db.collection('users').doc(uid);
     final logRef  = _db.collection('admin_logs').doc();
-
-    final batch = _db.batch();
+    final batch   = _db.batch();
 
     batch.update(userRef, {
-      'adminNote':      note.trim(),
-      'adminNoteBy':    adminEmail,
-      'adminNoteAt':    FieldValue.serverTimestamp(),
+      'adminNote':   note.trim(),
+      'adminNoteBy': _adminEmail,
+      'adminNoteAt': FieldValue.serverTimestamp(),
     });
 
     batch.set(logRef, {
-      'action':      'admin_note_added',
-      'adminUid':    adminUid,
-      'adminEmail':  adminEmail,
-      'targetUid':   uid,
-      'details':     {'note': note.trim()},
-      'createdAt':   FieldValue.serverTimestamp(),
+      'action':     'admin_note_added',
+      'adminUid':   _adminUid,
+      'adminEmail': _adminEmail,
+      'targetUid':  uid,
+      'details':    {'note': note.trim()},
+      'createdAt':  FieldValue.serverTimestamp(),
     });
 
     await batch.commit();
   }
 
   // ──────────────────────────────────────────────────────
-  // DISCORD WEBHOOKS (internal)
+  // DISCORD WEBHOOKS
   // ──────────────────────────────────────────────────────
   void _fireAdjustWebhook({
     required String playerName,
@@ -336,96 +330,67 @@ class AdminUserService {
     required String adminEmail,
   }) {
     _sendAdjustWebhookAsync(
-      playerName: playerName,
-      uid:        uid,
-      delta:      delta,
-      reason:     reason,
-      adminEmail: adminEmail,
-    ).catchError((dynamic e) {
-      debugPrint('[AdminUserService] Adjust webhook error: $e');
-    });
+      playerName: playerName, uid: uid,
+      delta: delta, reason: reason, adminEmail: adminEmail,
+    ).catchError((e) => debugPrint('[AdminUserService] Adjust webhook error: $e'));
   }
 
   Future<void> _sendAdjustWebhookAsync({
-    required String playerName,
-    required String uid,
-    required double delta,
-    required String reason,
+    required String playerName, required String uid,
+    required double delta,      required String reason,
     required String adminEmail,
   }) async {
     final isCredit = delta >= 0;
     final shortUid = uid.length > 12 ? '${uid.substring(0, 12)}...' : uid;
-
-    final payload = {
-      'embeds': [
-        {
-          'title': '${isCredit ? '➕' : '➖'}  Balance ${isCredit ? 'Credited' : 'Debited'} by Admin',
-          'color': isCredit ? 0x44FF99 : 0xFF9944,
-          'fields': [
-            {'name': '👤 Player',  'value': playerName,                           'inline': true},
-            {'name': '🆔 UID',     'value': '`$shortUid`',                        'inline': true},
-            {'name': '💰 Amount',  'value': '₹${delta.abs().toStringAsFixed(2)}', 'inline': true},
-            {'name': '👮 Admin',   'value': adminEmail,                            'inline': true},
-            {'name': '📝 Reason',  'value': reason,                                'inline': false},
-          ],
-          'timestamp': DateTime.now().toUtc().toIso8601String(),
-          'footer':    {'text': 'Shadow Storm Admin Panel  •  User Management'},
-        }
-      ],
-    };
-
     await http.post(
       Uri.parse(AppSecrets.depositWebhook),
       headers: {'Content-Type': 'application/json'},
-      body:    jsonEncode(payload),
+      body: jsonEncode({'embeds': [{
+        'title':  '${isCredit ? '➕' : '➖'}  Balance ${isCredit ? 'Credited' : 'Debited'} by Admin',
+        'color':   isCredit ? 0x44FF99 : 0xFF9944,
+        'fields': [
+          {'name': '👤 Player', 'value': playerName,                           'inline': true},
+          {'name': '🆔 UID',    'value': '`$shortUid`',                        'inline': true},
+          {'name': '💰 Amount', 'value': '₹${delta.abs().toStringAsFixed(2)}', 'inline': true},
+          {'name': '👮 Admin',  'value': adminEmail,                            'inline': true},
+          {'name': '📝 Reason', 'value': reason,                                'inline': false},
+        ],
+        'timestamp': DateTime.now().toUtc().toIso8601String(),
+        'footer':    {'text': 'Shadow Storm Admin Panel  •  User Management'},
+      }]}),
     );
   }
 
   void _fireAdminToggleWebhook({
-    required String playerName,
-    required String uid,
-    required bool   promoted,
-    required String adminEmail,
+    required String playerName, required String uid,
+    required bool   promoted,   required String adminEmail,
   }) {
     _sendAdminToggleWebhookAsync(
-      playerName: playerName,
-      uid:        uid,
-      promoted:   promoted,
-      adminEmail: adminEmail,
-    ).catchError((dynamic e) {
-      debugPrint('[AdminUserService] Admin toggle webhook error: $e');
-    });
+      playerName: playerName, uid: uid,
+      promoted: promoted, adminEmail: adminEmail,
+    ).catchError((e) => debugPrint('[AdminUserService] Admin toggle webhook error: $e'));
   }
 
   Future<void> _sendAdminToggleWebhookAsync({
-    required String playerName,
-    required String uid,
-    required bool   promoted,
-    required String adminEmail,
+    required String playerName, required String uid,
+    required bool   promoted,   required String adminEmail,
   }) async {
     final shortUid = uid.length > 12 ? '${uid.substring(0, 12)}...' : uid;
-
-    final payload = {
-      'embeds': [
-        {
-          'title': '${promoted ? '🛡️' : '👤'}  Admin ${promoted ? 'Promoted' : 'Demoted'}',
-          'color': promoted ? 0x9D55FF : 0xFF9944,
-          'fields': [
-            {'name': '👤 Player',  'value': playerName,   'inline': true},
-            {'name': '🆔 UID',     'value': '`$shortUid`','inline': true},
-            {'name': '🔑 Status',  'value': promoted ? 'ADMIN' : 'USER', 'inline': true},
-            {'name': '👮 By Admin','value': adminEmail,    'inline': true},
-          ],
-          'timestamp': DateTime.now().toUtc().toIso8601String(),
-          'footer':    {'text': 'Shadow Storm Admin Panel  •  User Management'},
-        }
-      ],
-    };
-
     await http.post(
       Uri.parse(AppSecrets.depositWebhook),
       headers: {'Content-Type': 'application/json'},
-      body:    jsonEncode(payload),
+      body: jsonEncode({'embeds': [{
+        'title':  '${promoted ? '🛡️' : '👤'}  Admin ${promoted ? 'Promoted' : 'Demoted'}',
+        'color':   promoted ? 0x9D55FF : 0xFF9944,
+        'fields': [
+          {'name': '👤 Player',  'value': playerName,   'inline': true},
+          {'name': '🆔 UID',     'value': '`$shortUid`','inline': true},
+          {'name': '🔑 Status',  'value': promoted ? 'ADMIN' : 'USER', 'inline': true},
+          {'name': '👮 By Admin','value': adminEmail,    'inline': true},
+        ],
+        'timestamp': DateTime.now().toUtc().toIso8601String(),
+        'footer':    {'text': 'Shadow Storm Admin Panel  •  User Management'},
+      }]}),
     );
   }
 }

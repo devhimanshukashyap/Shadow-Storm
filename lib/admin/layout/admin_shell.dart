@@ -1,9 +1,10 @@
 // lib/admin/layout/admin_shell.dart
 // ─────────────────────────────────────────────
 // SHADOW STORM — Admin Shell
-// Phase 5: Added 'logs', 'settings', 'tools' routes
+// F2: Badge count wiring, navState passed to dashboard
 // ─────────────────────────────────────────────
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../navigation/admin_nav_model.dart';
@@ -12,6 +13,7 @@ import '../widgets/admin_header.dart';
 import '../layout/admin_responsive.dart';
 import '../pages/admin_pages.dart';
 import '../theme/admin_theme.dart';
+import '../services/admin_analytics_service.dart';
 
 class AdminShell extends StatefulWidget {
   final User adminUser;
@@ -25,11 +27,13 @@ class _AdminShellState extends State<AdminShell>
     with SingleTickerProviderStateMixin {
   final AdminNavState _navState = AdminNavState();
 
-  bool _sidebarCollapsed    = false;
-  bool _mobileSidebarOpen   = false;
+  bool _sidebarCollapsed  = false;
+  bool _mobileSidebarOpen = false;
 
   late AnimationController _pageCtrl;
   late Animation<double>   _pageFade;
+
+  StreamSubscription? _badgeSub;
 
   @override
   void initState() {
@@ -39,10 +43,23 @@ class _AdminShellState extends State<AdminShell>
     )..forward();
     _pageFade = CurvedAnimation(parent: _pageCtrl, curve: Curves.easeOutCubic);
     _navState.addListener(_onNavChanged);
+    _startBadgeStream();
+  }
+
+  void _startBadgeStream() {
+    _badgeSub = AdminAnalyticsService.instance.badgeCountsStream().listen((counts) {
+      if (!mounted) return;
+      _navState.badges.update(
+        pendingDeposits:    counts['deposits']    ?? 0,
+        pendingWithdrawals: counts['withdrawals'] ?? 0,
+        tournamentAlerts:   counts['tournaments'] ?? 0,
+      );
+    });
   }
 
   @override
   void dispose() {
+    _badgeSub?.cancel();
     _pageCtrl.dispose();
     _navState.removeListener(_onNavChanged);
     _navState.dispose();
@@ -68,100 +85,86 @@ class _AdminShellState extends State<AdminShell>
   Widget _buildDesktopLayout() {
     return Scaffold(
       backgroundColor: AdminColors.background,
-      body: Row(
-        children: [
-          AdminSidebar(
+      body: Row(children: [
+        AdminSidebar(
+          navState:         _navState,
+          adminUser:        widget.adminUser,
+          isCollapsed:      _sidebarCollapsed,
+          onToggleCollapse: _toggleSidebar,
+        ),
+        Expanded(child: Column(children: [
+          AdminHeader(
             navState:         _navState,
             adminUser:        widget.adminUser,
-            isCollapsed:      _sidebarCollapsed,
-            onToggleCollapse: _toggleSidebar,
+            sidebarCollapsed: _sidebarCollapsed,
+            onToggleSidebar:  _toggleSidebar,
           ),
-          Expanded(
-            child: Column(
-              children: [
-                AdminHeader(
-                  navState:         _navState,
-                  adminUser:        widget.adminUser,
-                  sidebarCollapsed: _sidebarCollapsed,
-                  onToggleSidebar:  _toggleSidebar,
-                ),
-                Expanded(
-                  child: FadeTransition(
-                    opacity: _pageFade,
-                    child: ListenableBuilder(
-                      listenable: _navState,
-                      builder: (_, _) => _buildPage(_navState.activeId),
-                    ),
-                  ),
-                ),
-              ],
+          Expanded(child: FadeTransition(
+            opacity: _pageFade,
+            child: ListenableBuilder(
+              listenable: _navState,
+              builder: (_, _) => _buildPage(_navState.activeId),
             ),
-          ),
-        ],
-      ),
+          )),
+        ])),
+      ]),
     );
   }
 
   Widget _buildMobileLayout() {
     return Scaffold(
       backgroundColor: AdminColors.background,
-      body: Stack(
-        children: [
-          Column(
-            children: [
-              AdminHeader(
-                navState:         _navState,
-                adminUser:        widget.adminUser,
-                sidebarCollapsed: true,
-                onToggleSidebar:  _toggleMobileSidebar,
-              ),
-              Expanded(
-                child: FadeTransition(
-                  opacity: _pageFade,
-                  child: ListenableBuilder(
-                    listenable: _navState,
-                    builder: (_, _) => _buildPage(_navState.activeId),
-                  ),
-                ),
-              ),
-            ],
+      body: Stack(children: [
+        Column(children: [
+          AdminHeader(
+            navState:         _navState,
+            adminUser:        widget.adminUser,
+            sidebarCollapsed: true,
+            onToggleSidebar:  _toggleMobileSidebar,
           ),
-          if (_mobileSidebarOpen) ...[
-            GestureDetector(
-              onTap: _toggleMobileSidebar,
-              child: Container(color: Colors.black.withOpacity(0.6)),
+          Expanded(child: FadeTransition(
+            opacity: _pageFade,
+            child: ListenableBuilder(
+              listenable: _navState,
+              builder: (_, _) => _buildPage(_navState.activeId),
             ),
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 280),
-              curve:    Curves.easeInOutCubic,
-              left: 0, top: 0, bottom: 0,
-              child: AdminSidebar(
-                navState:         _navState,
-                adminUser:        widget.adminUser,
-                isCollapsed:      false,
-                onToggleCollapse: _toggleMobileSidebar,
-              ),
+          )),
+        ]),
+        if (_mobileSidebarOpen) ...[
+          GestureDetector(
+            onTap: _toggleMobileSidebar,
+            child: Container(color: Colors.black.withValues(alpha: 0.6)),
+          ),
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 280),
+            curve:    Curves.easeInOutCubic,
+            left: 0, top: 0, bottom: 0,
+            child: AdminSidebar(
+              navState:         _navState,
+              adminUser:        widget.adminUser,
+              isCollapsed:      false,
+              onToggleCollapse: _toggleMobileSidebar,
             ),
-          ],
+          ),
         ],
-      ),
+      ]),
     );
   }
 
   // ──────────────────────────────────────────
-  // PAGE ROUTER — Phase 5 complete
+  // PAGE ROUTER — F2 complete
   // ──────────────────────────────────────────
   Widget _buildPage(String id) {
     return switch (id) {
-      'dashboard'   => const AdminDashboardPage(),
+      'dashboard'   => AdminDashboardPage(navState: _navState),
       'deposits'    => const AdminDepositsPage(),
       'withdrawals' => const AdminWithdrawalsPage(),
       'tournaments' => const AdminTournamentsPage(),
       'users'       => const AdminUsersPage(),
-      'logs'        => const AdminLogsPage(),        // Phase 5 ✓
-      'settings'    => const AdminSettingsPage(),    // Phase 5 ✓
-      'tools'       => const AdminSystemToolsPage(), // Phase 5 ✓
-      _             => const AdminDashboardPage(),
+      'logs'        => const AdminLogsPage(),
+      'settings'    => const AdminSettingsPage(),
+      'tools'       => const AdminSystemToolsPage(),
+      _             => AdminDashboardPage(navState: _navState),
     };
   }
 }
