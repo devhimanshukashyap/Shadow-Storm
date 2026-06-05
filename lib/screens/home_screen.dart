@@ -1,14 +1,36 @@
 // lib/screens/home_screen.dart
 // ─────────────────────────────────────────────
-// SHADOW STORM — Home Screen (Phase F1)
+// SHADOW STORM — Home Screen (Phase F2.5 / PRE-F3)
 //
-// Changes from v3:
-//   PRIORITY 3: Scaffold is now wrapped with MaintenanceGuard.
-//     When maintenanceMode=true, the maintenance screen is shown
-//     instead of the home body — including the nav bar.
-//   PRIORITY 4: walletFrozen banner updated — tournament join is also
-//     blocked when wallet is frozen (message updated accordingly).
-//   All original v3 widgets, filters, animations, and navigation intact.
+// Changes from Phase F1:
+//
+//   PRIORITY 1 — Status filter row (All/Live/Upcoming/Completed) REMOVED.
+//     Home now shows ONLY tournaments that are open for registration:
+//       • status == 'upcoming'
+//       • Live tournaments do NOT appear on Home
+//       • Completed tournaments do NOT appear on Home
+//     Live tournaments automatically disappear from Home when they go live.
+//     Players who are registered in a live tournament can find it in Events.
+//
+//   PRIORITY 1 — Game mode filter row kept and extended:
+//     All / Battle Royale / Clash Squad / Lone Wolf / 2v2 /
+//     3v3 / 4v4 / Lose To Win / Custom (+ any admin-created modes)
+//     Filters apply only to the upcoming tournament feed.
+//
+//   PRIORITY 2 — Empty sections hidden:
+//     Featured section: hidden entirely when no featured upcoming tournament.
+//     Tournament feed: shows proper empty state, never a blank container.
+//     Stats bar: only shown after profile stats are loaded (no blank shimmer area).
+//
+//   PRIORITY 3 (F1 unchanged): MaintenanceGuard wraps Scaffold.
+//   PRIORITY 4 (F1 unchanged): walletFrozen banner shown when frozen.
+//   PRIORITY 5 (F1 unchanged): Bottom nav consistent across screens.
+//   PRIORITY 6 (F1 unchanged): Admin settings obeyed everywhere.
+//   PRIORITY 8 (F1 unchanged): Cache-first stats, pull-to-refresh invalidates.
+//
+//   All existing widgets, animations, cards, nav bar, and design kept intact.
+//   Only removed: _StatusFilterRow, _statusOptions, _statusFilter state.
+//   Only changed: _TournamentFeedSection only ever streams upcoming.
 // ─────────────────────────────────────────────
 
 import 'dart:async';
@@ -66,35 +88,28 @@ class SSTextStyles {
   static final monoPrize    = _base.copyWith(fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: 0.5, color: SSColors.gold);
 }
 
+// ─────────────────────────────────────────────
+// FILTER OPTIONS — Game mode only (no status filter)
+// PRIORITY 1: Status filter removed entirely.
+// ─────────────────────────────────────────────
 class _FilterOption {
   final String value, label, emoji;
   const _FilterOption({required this.value, required this.label, required this.emoji});
 }
 
-class _StatusOption {
-  final String   value, label;
-  final Color    color;
-  final IconData icon;
-  const _StatusOption({required this.value, required this.label, required this.color, required this.icon});
-}
-
+// PRIORITY 1: Extended game mode list per spec.
 const _filterOptions = [
   _FilterOption(value: 'all',           label: 'All',           emoji: '⚡'),
   _FilterOption(value: 'battle_royale', label: 'Battle Royale', emoji: '🗺️'),
   _FilterOption(value: 'clash_squad',   label: 'Clash Squad',   emoji: '⚔️'),
-  _FilterOption(value: '2v2',           label: '2v2 Arena',     emoji: '🤝'),
   _FilterOption(value: 'lone_wolf',     label: 'Lone Wolf',     emoji: '🎯'),
+  _FilterOption(value: '2v2',           label: '2v2',           emoji: '🤝'),
+  _FilterOption(value: '3v3',           label: '3v3',           emoji: '⚡'),
+  _FilterOption(value: '4v4',           label: '4v4',           emoji: '🛡️'),
   _FilterOption(value: 'lose_to_win',   label: 'Lose To Win',   emoji: '🔄'),
   _FilterOption(value: '1v1_arena',     label: '1v1 Arena',     emoji: '🥊'),
   _FilterOption(value: 'sniper',        label: 'Sniper',        emoji: '🔭'),
   _FilterOption(value: 'custom_league', label: 'League',        emoji: '🏆'),
-];
-
-const _statusOptions = [
-  _StatusOption(value: 'all',       label: 'All',       color: SSColors.purpleLight, icon: Icons.grid_view_rounded),
-  _StatusOption(value: 'live',      label: 'Live',      color: SSColors.live,        icon: Icons.radio_button_checked),
-  _StatusOption(value: 'upcoming',  label: 'Upcoming',  color: SSColors.gold,        icon: Icons.schedule_rounded),
-  _StatusOption(value: 'completed', label: 'Completed', color: SSColors.textMuted,   icon: Icons.check_circle_outline_rounded),
 ];
 
 // ─────────────────────────────────────────────
@@ -120,8 +135,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Set<String> _joinedIds = {};
   StreamSubscription<Set<String>>? _joinedSub;
 
-  String _typeFilter   = 'all';
-  String _statusFilter = 'all';
+  // PRIORITY 1: Only game mode filter remains. Status filter removed.
+  String _typeFilter = 'all';
 
   int  _tournamentsPlayed = 0;
   int  _wins              = 0;
@@ -135,10 +150,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
-    _fadeController = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 900))..forward();
-    _pulseController = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 2000))..repeat(reverse: true);
+    _fadeController  = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..forward();
+    _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 2000))..repeat(reverse: true);
     _fadeIn = CurvedAnimation(parent: _fadeController, curve: Curves.easeOutCubic);
     _pulse  = CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut);
 
@@ -150,7 +163,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       });
       _loadStats();
     }
-    // Warm up settings stream (single shared listener for whole app).
     AppSettingsService.instance.settingsStream.listen((_) {});
   }
 
@@ -162,9 +174,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  // PRIORITY 8: Cache-first stats load.
+  // ── Cache-first stats load (PRIORITY 8, unchanged) ───────────────────────
+
   Future<void> _loadStats() async {
-    // Show cache immediately if available.
     final cached = CacheService.instance.get<Map<String, dynamic>>(CacheKey.profileStats);
     if (cached != null) {
       setState(() {
@@ -172,13 +184,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _wins              = (cached['wins'] as int?) ?? 0;
         _statsLoaded       = true;
       });
-      // Only fetch fresh if cache is expired.
       if (!CacheService.instance.isFresh(CacheKey.profileStats)) {
         await _fetchFreshStats();
       }
       return;
     }
-    // No cache — fetch immediately.
     await _fetchFreshStats();
   }
 
@@ -203,12 +213,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _onRefresh() async {
-    // Pull-to-refresh: invalidate cache then reload fresh.
     _tournamentService.invalidateTournamentCache();
     CacheService.instance.invalidate(CacheKey.profileStats);
     _statsLoaded = false;
     await _fetchFreshStats();
   }
+
+  // ── Navigation helpers ────────────────────────────────────────────────────
 
   void _openProfile() =>
       Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
@@ -222,15 +233,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void _openTournamentDetails(TournamentModel t) =>
       Navigator.push(context, _fadeRoute(TournamentDetailsScreen(tournament: t)));
 
-  void _openAllTournaments({String? statusFilter, String? typeFilter, String? title}) =>
+  void _openAllTournaments({String? typeFilter, String? title}) =>
       Navigator.push(context, _fadeRoute(AllTournamentsScreen(
-        title:         title ?? 'All Tournaments',
-        initialStatus: statusFilter,
+        title:         title ?? 'Upcoming Tournaments',
+        // PRIORITY 1: Always pass 'upcoming' as status — Home only shows upcoming.
+        initialStatus: 'upcoming',
         initialType:   typeFilter,
       )));
 
   PageRouteBuilder _fadeRoute(Widget page) => PageRouteBuilder(
-    pageBuilder: (_, anim, _) => page,
+    pageBuilder:        (_, anim, _) => page,
     transitionsBuilder: (_, anim, _, child) => FadeTransition(
       opacity: CurvedAnimation(parent: anim, curve: Curves.easeOutCubic),
       child: child,
@@ -240,7 +252,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // ─────────────────────────────────────────────
   // BUILD
-  // PRIORITY 3: MaintenanceGuard wraps the entire Scaffold.
+  // PRIORITY 3: MaintenanceGuard wraps entire Scaffold.
   // ─────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
@@ -262,8 +274,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // ─────────────────────────────────────────────
   // HOME BODY
-  // NOTE: The inner StreamBuilder for settings only handles
-  // wallet frozen banner now. Maintenance is handled by MaintenanceGuard above.
+  //
+  // PRIORITY 1: No status filter. Streams only upcoming tournaments.
+  // PRIORITY 2: Featured section hidden when no featured tournament.
+  // PRIORITY 4: Wallet frozen banner.
   // ─────────────────────────────────────────────
   Widget _buildHomeBody() {
     return StreamBuilder<AppSettings>(
@@ -289,24 +303,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   child: _WalletFrozenBanner(reason: settings.walletFreezeReason),
                 ),
 
-              SliverToBoxAdapter(
-                child: _StatsBar(
-                  tournamentsPlayed: _tournamentsPlayed,
-                  wins:              _wins,
-                  loaded:            _statsLoaded,
+              // Stats bar (hidden until loaded — PRIORITY 2).
+              if (_statsLoaded)
+                SliverToBoxAdapter(
+                  child: _StatsBar(
+                    tournamentsPlayed: _tournamentsPlayed,
+                    wins:              _wins,
+                  ),
                 ),
-              ),
-              const SliverToBoxAdapter(child: SizedBox(height: 14)),
+              if (_statsLoaded) const SliverToBoxAdapter(child: SizedBox(height: 14)),
 
-              SliverToBoxAdapter(
-                child: _StatusFilterRow(
-                  selected:  _statusFilter,
-                  pulse:     _pulse,
-                  onChanged: (v) => setState(() => _statusFilter = v),
-                ),
-              ),
-              const SliverToBoxAdapter(child: SizedBox(height: 10)),
-
+              // PRIORITY 1: Game mode filter chips only — no status filter row.
               SliverToBoxAdapter(
                 child: _FilterChipRow(
                   selected:  _typeFilter,
@@ -315,35 +322,32 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
               const SliverToBoxAdapter(child: SizedBox(height: 20)),
 
-              if (_statusFilter == 'all' || _statusFilter == 'upcoming')
-                SliverToBoxAdapter(
-                  child: _FeaturedSection(
-                    stream:     _tournamentService.featuredTournamentStream(),
-                    pulse:      _pulse,
-                    joinedIds:  _joinedIds,
-                    typeFilter: _typeFilter,
-                    onTap:      _openTournamentDetails,
-                  ),
+              // Featured section — PRIORITY 2: hidden when null (no blank area).
+              SliverToBoxAdapter(
+                child: _FeaturedSection(
+                  stream:    _tournamentService.featuredTournamentStream(),
+                  pulse:     _pulse,
+                  joinedIds: _joinedIds,
+                  typeFilter: _typeFilter,
+                  onTap:     _openTournamentDetails,
                 ),
+              ),
 
-              if (_statusFilter == 'all' || _statusFilter == 'upcoming')
-                const SliverToBoxAdapter(child: SizedBox(height: 20)),
-
+              // Feed header.
               SliverToBoxAdapter(child: _buildFeedHeader()),
               const SliverToBoxAdapter(child: SizedBox(height: 12)),
 
+              // PRIORITY 1: Feed only streams upcoming tournaments.
               SliverToBoxAdapter(
-                child: _TournamentFeedSection(
-                  service:      _tournamentService,
-                  joinedIds:    _joinedIds,
-                  typeFilter:   _typeFilter,
-                  statusFilter: _statusFilter,
-                  pulse:        _pulse,
-                  onTap:        _openTournamentDetails,
-                  onSeeAll: () => _openAllTournaments(
-                    statusFilter: _statusFilter == 'all' ? null : _statusFilter,
-                    typeFilter:   _typeFilter   == 'all' ? null : _typeFilter,
-                    title:        _feedTitle,
+                child: _UpcomingFeedSection(
+                  service:    _tournamentService,
+                  joinedIds:  _joinedIds,
+                  typeFilter: _typeFilter,
+                  pulse:      _pulse,
+                  onTap:      _openTournamentDetails,
+                  onSeeAll:   () => _openAllTournaments(
+                    typeFilter: _typeFilter == 'all' ? null : _typeFilter,
+                    title:      _feedTitle,
                   ),
                 ),
               ),
@@ -356,19 +360,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  // ─── Feed header label ────────────────────────────────────────────────────
+
   String get _feedTitle {
-    final statusLabel = switch (_statusFilter) {
-      'live'      => 'Live',
-      'upcoming'  => 'Upcoming',
-      'completed' => 'Completed',
-      _           => 'All',
-    };
+    // PRIORITY 1: Always "Upcoming" — no status in the label.
     final typeLabel = _filterOptions
         .firstWhere((o) => o.value == _typeFilter,
             orElse: () => const _FilterOption(value: 'all', label: 'All', emoji: '⚡'))
         .label;
-    if (_typeFilter == 'all') return '$statusLabel Tournaments';
-    return '$statusLabel $typeLabel Tournaments';
+    if (_typeFilter == 'all') return 'Upcoming Tournaments';
+    return 'Upcoming $typeLabel';
   }
 
   Widget _buildFeedHeader() {
@@ -389,9 +390,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ),
         GestureDetector(
           onTap: () => _openAllTournaments(
-            statusFilter: _statusFilter == 'all' ? null : _statusFilter,
-            typeFilter:   _typeFilter   == 'all' ? null : _typeFilter,
-            title:        _feedTitle,
+            typeFilter: _typeFilter == 'all' ? null : _typeFilter,
+            title:      _feedTitle,
           ),
           behavior: HitTestBehavior.opaque,
           child: Padding(
@@ -408,7 +408,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   // ─────────────────────────────────────────────
-  // APP BAR (unchanged from v3)
+  // APP BAR (unchanged from F1)
   // ─────────────────────────────────────────────
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
@@ -453,6 +453,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ],
           )),
+          // Wallet balance chip.
           GestureDetector(
             onTap: _openWallet,
             child: Container(
@@ -482,6 +483,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ),
           const SizedBox(width: 10),
+          // Profile avatar.
           GestureDetector(
             onTap: _openProfile,
             child: Container(
@@ -513,7 +515,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   // ─────────────────────────────────────────────
-  // BOTTOM NAV (unchanged from v3)
+  // BOTTOM NAV (unchanged from F1)
   // ─────────────────────────────────────────────
   Widget _buildBottomNav() {
     final items = [
@@ -573,75 +575,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 }
 
-// ─────────────────────────────────────────────
-// ALL EXISTING WIDGETS FROM v3 — UNCHANGED
-// (StatusFilterRow, FilterChipRow, FeaturedSection,
-//  TournamentFeedSection, TournamentListCard, FeaturedBanner,
-//  StatsBar, all small reusable widgets, shimmer states, etc.)
-// ─────────────────────────────────────────────
-
-class _StatusFilterRow extends StatelessWidget {
-  final String             selected;
-  final Animation<double>  pulse;
-  final void Function(String) onChanged;
-  const _StatusFilterRow({required this.selected, required this.pulse, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        children: _statusOptions.map((opt) {
-          final active = selected == opt.value;
-          return Expanded(
-            child: GestureDetector(
-              onTap: () => onChanged(opt.value),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                margin: const EdgeInsets.only(right: 6),
-                padding: const EdgeInsets.symmetric(vertical: 9),
-                decoration: BoxDecoration(
-                  color: active ? opt.color.withValues(alpha: 0.15) : SSColors.surfaceCard,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: active ? opt.color.withValues(alpha: 0.5) : SSColors.border,
-                    width: active ? 1.5 : 1,
-                  ),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    opt.value == 'live' && active
-                        ? AnimatedBuilder(
-                            animation: pulse,
-                            builder: (_, _) => Container(
-                              width: 10, height: 10,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: SSColors.live.withValues(alpha: 0.5 + 0.5 * pulse.value),
-                                boxShadow: [BoxShadow(
-                                  color: SSColors.liveGlow.withValues(alpha: 0.4 * pulse.value),
-                                  blurRadius: 6,
-                                )],
-                              ),
-                            ),
-                          )
-                        : Icon(opt.icon, color: active ? opt.color : SSColors.textMuted, size: 14),
-                    const SizedBox(height: 4),
-                    Text(opt.label, style: TextStyle(
-                      color: active ? opt.color : SSColors.textMuted,
-                      fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.3,
-                    )),
-                  ],
-                ),
-              ),
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
-}
+// ═════════════════════════════════════════════════════════════════════════════
+// FILTER CHIP ROW — Game mode only
+// PRIORITY 1: Status filter row (_StatusFilterRow) removed entirely.
+//             Only game mode chips remain.
+// ═════════════════════════════════════════════════════════════════════════════
 
 class _FilterChipRow extends StatelessWidget {
   final String                 selected;
@@ -693,6 +631,12 @@ class _FilterChipRow extends StatelessWidget {
   }
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// FEATURED SECTION
+// PRIORITY 2: Returns SizedBox.shrink() when no featured upcoming tournament —
+//             no blank container, no shimmer placeholder left behind.
+// ═════════════════════════════════════════════════════════════════════════════
+
 class _FeaturedSection extends StatelessWidget {
   final Stream<TournamentModel?>        stream;
   final Animation<double>               pulse;
@@ -706,97 +650,116 @@ class _FeaturedSection extends StatelessWidget {
     return StreamBuilder<TournamentModel?>(
       stream: stream,
       builder: (_, snap) {
+        // Still loading — show nothing rather than an empty shimmer block.
+        // PRIORITY 2: no blank containers.
         if (snap.connectionState == ConnectionState.waiting) {
-          return const _ShimmerPlaceholder(height: 200);
+          return const SizedBox.shrink();
         }
+
         final t = snap.data;
+
+        // No featured tournament — hide section entirely.
         if (t == null) return const SizedBox.shrink();
+
+        // Featured tournament exists but doesn't match the current type filter.
         if (typeFilter != 'all' && t.tournamentType != typeFilter) {
           return const SizedBox.shrink();
         }
-        return _FeaturedBanner(
-          tournament: t, pulse: pulse,
-          isJoined: joinedIds.contains(t.id), onTap: onTap,
-        );
+
+        // PRIORITY 1: Featured section only shows upcoming tournaments.
+        // If the featured tournament somehow went live, hide it from Home.
+        if (t.status != TournamentStatus.upcoming) return const SizedBox.shrink();
+
+        return Column(children: [
+          _FeaturedBanner(
+            tournament: t,
+            pulse:      pulse,
+            isJoined:   joinedIds.contains(t.id),
+            onTap:      onTap,
+          ),
+          const SizedBox(height: 20),
+        ]);
       },
     );
   }
 }
 
-class _TournamentFeedSection extends StatelessWidget {
+// ═════════════════════════════════════════════════════════════════════════════
+// UPCOMING FEED SECTION
+//
+// PRIORITY 1: Streams ONLY upcoming tournaments.
+//             Live and completed tournaments never appear here.
+//             When a tournament goes live, Firestore stream removes it
+//             automatically and it disappears from Home without any
+//             manual intervention.
+// ═════════════════════════════════════════════════════════════════════════════
+
+class _UpcomingFeedSection extends StatelessWidget {
   final TournamentService              service;
   final Set<String>                    joinedIds;
   final String                         typeFilter;
-  final String                         statusFilter;
   final Animation<double>              pulse;
   final void Function(TournamentModel) onTap;
   final VoidCallback                   onSeeAll;
-  const _TournamentFeedSection({required this.service, required this.joinedIds, required this.typeFilter, required this.statusFilter, required this.pulse, required this.onTap, required this.onSeeAll});
 
-  Stream<List<TournamentModel>> _buildStream() {
-    if (statusFilter == 'live')      return service.liveTournamentsStream();
-    if (statusFilter == 'upcoming')  return service.upcomingTournamentsStream(limit: 30);
-    if (statusFilter == 'completed') return service.completedTournamentsStream(limit: 30);
-    return service.filteredTournamentsStream(
-      typeFilter: typeFilter == 'all' ? null : typeFilter,
-      limit: 50,
-    );
-  }
-
-  List<TournamentModel> _applyTypeFilter(List<TournamentModel> list) {
-    if (typeFilter == 'all') return list;
-    return list.where((t) => t.tournamentType == typeFilter).toList();
-  }
-
-  List<TournamentModel> _sort(List<TournamentModel> list) {
-    final live      = list.where((t) => t.status == TournamentStatus.live).toList();
-    final upcoming  = list.where((t) => t.status == TournamentStatus.upcoming).toList()
-      ..sort((a, b) {
-        if (a.startTime == null) return 1;
-        if (b.startTime == null) return -1;
-        return a.startTime!.compareTo(b.startTime!);
-      });
-    final completed = list.where((t) => t.status == TournamentStatus.completed).toList()
-      ..sort((a, b) {
-        if (a.startTime == null) return 1;
-        if (b.startTime == null) return -1;
-        return b.startTime!.compareTo(a.startTime!);
-      });
-    final cancelled = list.where((t) => t.status == TournamentStatus.cancelled).toList();
-    return [...live, ...upcoming, ...completed, ...cancelled];
-  }
+  const _UpcomingFeedSection({
+    required this.service,
+    required this.joinedIds,
+    required this.typeFilter,
+    required this.pulse,
+    required this.onTap,
+    required this.onSeeAll,
+  });
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<TournamentModel>>(
-      stream: _buildStream(),
+      // PRIORITY 1: Always stream upcoming only — no status parameter needed.
+      stream: service.upcomingTournamentsStream(limit: 30),
       builder: (_, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          return Column(children: List.generate(4, (_) => const _ListCardShimmer()));
+          return Column(children: List.generate(3, (_) => const _ListCardShimmer()));
         }
         if (snap.hasError) {
           return _ErrorCard(message: 'Could not load tournaments.\n${snap.error}');
         }
-        final filtered = _applyTypeFilter(snap.data ?? []);
-        final sorted   = _sort(filtered);
-        if (sorted.isEmpty) {
-          return _EmptyCard(statusFilter: statusFilter, typeFilter: typeFilter);
+
+        // Apply game mode filter client-side.
+        final all      = snap.data ?? [];
+        final filtered = typeFilter == 'all'
+            ? all
+            : all.where((t) => t.tournamentType == typeFilter).toList();
+
+        // Sort by startTime ascending (soonest first).
+        filtered.sort((a, b) {
+          if (a.startTime == null) return 1;
+          if (b.startTime == null) return -1;
+          return a.startTime!.compareTo(b.startTime!);
+        });
+
+        if (filtered.isEmpty) {
+          return _EmptyCard(typeFilter: typeFilter);
         }
+
         return Column(
-          children: sorted.map((t) => _TournamentListCard(
-            tournament: t,
-            isJoined:   joinedIds.contains(t.id),
-            pulse:      pulse,
-            onTap:      () => onTap(t),
-            animIndex:  sorted.indexOf(t),
-          )).toList(),
+          children: filtered.asMap().entries.map((entry) =>
+            _TournamentListCard(
+              tournament: entry.value,
+              isJoined:   joinedIds.contains(entry.value.id),
+              pulse:      pulse,
+              onTap:      () => onTap(entry.value),
+              animIndex:  entry.key,
+            ),
+          ).toList(),
         );
       },
     );
   }
 }
 
-// ─── All remaining v3 widgets below (unchanged) ─────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// TOURNAMENT LIST CARD (unchanged from F1)
+// ═════════════════════════════════════════════════════════════════════════════
 
 class _TournamentListCard extends StatefulWidget {
   final TournamentModel   tournament;
@@ -811,7 +774,7 @@ class _TournamentListCard extends StatefulWidget {
 class _TournamentListCardState extends State<_TournamentListCard> with SingleTickerProviderStateMixin {
   late AnimationController _slideCtrl;
   late Animation<Offset> _slide;
-  late Animation<double> _fade;
+  late Animation<double>  _fade;
   bool _pressed = false;
 
   @override
@@ -820,7 +783,7 @@ class _TournamentListCardState extends State<_TournamentListCard> with SingleTic
     _slideCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 400));
     _slide = Tween<Offset>(begin: const Offset(0, 0.15), end: Offset.zero)
         .animate(CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOutCubic));
-    _fade = CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOut);
+    _fade  = CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOut);
     Future.delayed(Duration(milliseconds: 60 * widget.animIndex), () {
       if (mounted) _slideCtrl.forward();
     });
@@ -828,28 +791,19 @@ class _TournamentListCardState extends State<_TournamentListCard> with SingleTic
 
   @override void dispose() { _slideCtrl.dispose(); super.dispose(); }
 
-  Color _statusAccentColor(TournamentModel t) {
-    switch (t.status) {
-      case TournamentStatus.live:      return SSColors.live;
-      case TournamentStatus.completed: return SSColors.textMuted;
-      case TournamentStatus.upcoming:  return SSColors.purple;
-      case TournamentStatus.cancelled: return SSColors.textMuted;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final t = widget.tournament;
-    final isLive = t.status == TournamentStatus.live;
+
     return SlideTransition(
       position: _slide,
       child: FadeTransition(
         opacity: _fade,
         child: GestureDetector(
           onTap: widget.onTap,
-          onTapDown: (_) => setState(() => _pressed = true),
-          onTapUp: (_) => setState(() => _pressed = false),
-          onTapCancel: () => setState(() => _pressed = false),
+          onTapDown:   (_) => setState(() => _pressed = true),
+          onTapUp:     (_) => setState(() => _pressed = false),
+          onTapCancel: ()  => setState(() => _pressed = false),
           child: AnimatedScale(
             scale: _pressed ? 0.98 : 1.0,
             duration: const Duration(milliseconds: 100),
@@ -861,17 +815,13 @@ class _TournamentListCardState extends State<_TournamentListCard> with SingleTic
                   color: SSColors.surfaceCard,
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(
-                    color: isLive
-                        ? SSColors.live.withValues(alpha: 0.3 + 0.2 * widget.pulse.value)
-                        : widget.isJoined
-                            ? SSColors.success.withValues(alpha: 0.3)
-                            : SSColors.border,
-                    width: (isLive || widget.isJoined) ? 1.5 : 1,
+                    color: widget.isJoined
+                        ? SSColors.success.withValues(alpha: 0.3)
+                        : SSColors.border,
+                    width: widget.isJoined ? 1.5 : 1,
                   ),
                   boxShadow: [BoxShadow(
-                    color: isLive
-                        ? SSColors.live.withValues(alpha: 0.05 + 0.04 * widget.pulse.value)
-                        : SSColors.purple.withValues(alpha: 0.06),
+                    color: SSColors.purple.withValues(alpha: 0.06),
                     blurRadius: 12,
                   )],
                 ),
@@ -879,11 +829,12 @@ class _TournamentListCardState extends State<_TournamentListCard> with SingleTic
               ),
               child: IntrinsicHeight(
                 child: Row(children: [
+                  // Accent bar — always purple for upcoming.
                   Container(
                     width: 4,
-                    decoration: BoxDecoration(
-                      color: _statusAccentColor(t),
-                      borderRadius: const BorderRadius.only(
+                    decoration: const BoxDecoration(
+                      color: SSColors.purple,
+                      borderRadius: BorderRadius.only(
                         topLeft: Radius.circular(16), bottomLeft: Radius.circular(16),
                       ),
                     ),
@@ -892,8 +843,9 @@ class _TournamentListCardState extends State<_TournamentListCard> with SingleTic
                     child: Padding(
                       padding: const EdgeInsets.all(14),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        // Pills row.
                         Row(children: [
-                          _StatusPill(t.status),
+                          _UpcomingPill(),
                           const SizedBox(width: 6),
                           _TypePill(t.tournamentType),
                           if (t.isTeamTournament) ...[
@@ -919,11 +871,11 @@ class _TournamentListCardState extends State<_TournamentListCard> with SingleTic
                         ), maxLines: 1, overflow: TextOverflow.ellipsis),
                         const SizedBox(height: 12),
                         Row(children: [
-                          _Stat(icon: Icons.emoji_events_rounded, color: SSColors.gold, value: t.prizePoolDisplay),
+                          _Stat(icon: Icons.emoji_events_rounded, color: SSColors.gold,        value: t.prizePoolDisplay),
                           const SizedBox(width: 16),
-                          _Stat(icon: Icons.people_rounded, color: SSColors.purpleLight, value: '${t.joinedPlayers}/${t.maxPlayers}'),
+                          _Stat(icon: Icons.people_rounded,       color: SSColors.purpleLight,  value: '${t.joinedPlayers}/${t.maxPlayers}'),
                           const SizedBox(width: 16),
-                          _Stat(icon: Icons.payments_rounded, color: t.entryFee > 0 ? SSColors.textSecondary : SSColors.success, value: t.entryFeeDisplay),
+                          _Stat(icon: Icons.payments_rounded,     color: t.entryFee > 0 ? SSColors.textSecondary : SSColors.success, value: t.entryFeeDisplay),
                           const Spacer(),
                           Container(
                             padding: const EdgeInsets.all(6),
@@ -936,10 +888,12 @@ class _TournamentListCardState extends State<_TournamentListCard> with SingleTic
                           ),
                         ]),
                         const SizedBox(height: 10),
+                        // Slot fill progress bar.
                         ClipRRect(
                           borderRadius: BorderRadius.circular(4),
                           child: LinearProgressIndicator(
-                            value: t.fillPercent, minHeight: 3,
+                            value:           t.fillPercent,
+                            minHeight:       3,
                             backgroundColor: SSColors.surfaceElevated,
                             valueColor: AlwaysStoppedAnimation(
                               t.isAlmostFull ? SSColors.live : SSColors.purple,
@@ -958,6 +912,10 @@ class _TournamentListCardState extends State<_TournamentListCard> with SingleTic
     );
   }
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FEATURED BANNER (unchanged from F1)
+// ═════════════════════════════════════════════════════════════════════════════
 
 class _FeaturedBanner extends StatefulWidget {
   final TournamentModel              tournament;
@@ -981,9 +939,9 @@ class _FeaturedBannerState extends State<_FeaturedBanner> with SingleTickerProvi
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: GestureDetector(
         onTap: () => widget.onTap(t),
-        onTapDown: (_) => setState(() => _pressed = true),
-        onTapUp: (_) => setState(() => _pressed = false),
-        onTapCancel: () => setState(() => _pressed = false),
+        onTapDown:   (_) => setState(() => _pressed = true),
+        onTapUp:     (_) => setState(() => _pressed = false),
+        onTapCancel: ()  => setState(() => _pressed = false),
         child: AnimatedScale(
           scale: _pressed ? 0.98 : 1.0,
           duration: const Duration(milliseconds: 120),
@@ -1007,7 +965,6 @@ class _FeaturedBannerState extends State<_FeaturedBanner> with SingleTickerProvi
                 height: 200,
                 decoration: BoxDecoration(
                   color: SSColors.surfaceCard,
-                  borderRadius: BorderRadius.circular(20),
                   image: (t.bannerUrl?.isNotEmpty == true)
                       ? DecorationImage(
                           image: NetworkImage(t.bannerUrl!),
@@ -1033,7 +990,8 @@ class _FeaturedBannerState extends State<_FeaturedBanner> with SingleTickerProvi
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
                       color: widget.isJoined
-                          ? SSColors.success.withValues(alpha: 0.4) : SSColors.borderBright,
+                          ? SSColors.success.withValues(alpha: 0.4)
+                          : SSColors.borderBright,
                       width: widget.isJoined ? 1.5 : 1,
                     ),
                   ))),
@@ -1041,7 +999,7 @@ class _FeaturedBannerState extends State<_FeaturedBanner> with SingleTickerProvi
                     padding: const EdgeInsets.all(16),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Row(children: [
-                        _Badge(label: t.modeDisplay, color: SSColors.purpleDark),
+                        _Badge(label: t.modeDisplay,      color: SSColors.purpleDark),
                         const SizedBox(width: 8),
                         _Badge(label: t.startTimeDisplay, color: SSColors.surfaceElevated, textColor: SSColors.gold),
                         const Spacer(),
@@ -1056,11 +1014,11 @@ class _FeaturedBannerState extends State<_FeaturedBanner> with SingleTickerProvi
                       Text(t.subtitle, style: SSTextStyles.bodyMedium, overflow: TextOverflow.ellipsis),
                       const SizedBox(height: 12),
                       Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                        _InfoColumn(label: 'PRIZE POOL', valueWidget: Text(t.prizePoolDisplay, style: SSTextStyles.monoPrize, overflow: TextOverflow.ellipsis)),
+                        _InfoColumn(label: 'PRIZE POOL',  valueWidget: Text(t.prizePoolDisplay, style: SSTextStyles.monoPrize, overflow: TextOverflow.ellipsis)),
                         const SizedBox(width: 16),
-                        _InfoColumn(label: 'ENTRY', valueWidget: Text(t.entryFeeDisplay, style: SSTextStyles.titleMedium.copyWith(color: SSColors.textPrimary), overflow: TextOverflow.ellipsis)),
+                        _InfoColumn(label: 'ENTRY',       valueWidget: Text(t.entryFeeDisplay, style: SSTextStyles.titleMedium.copyWith(color: SSColors.textPrimary), overflow: TextOverflow.ellipsis)),
                         const SizedBox(width: 16),
-                        _InfoColumn(label: 'SLOTS LEFT', valueWidget: Text('${t.slotsLeft}', style: SSTextStyles.titleMedium.copyWith(color: t.isAlmostFull ? SSColors.live : SSColors.textPrimary))),
+                        _InfoColumn(label: 'SLOTS LEFT',  valueWidget: Text('${t.slotsLeft}', style: SSTextStyles.titleMedium.copyWith(color: t.isAlmostFull ? SSColors.live : SSColors.textPrimary))),
                         const Spacer(),
                         widget.isJoined
                             ? _SmallJoinedBadge()
@@ -1078,7 +1036,9 @@ class _FeaturedBannerState extends State<_FeaturedBanner> with SingleTickerProvi
   }
 }
 
-// PRIORITY 4: Updated wallet frozen banner — mentions tournament entry too.
+// ─────────────────────────────────────────────
+// WALLET FROZEN BANNER (unchanged from F1)
+// ─────────────────────────────────────────────
 class _WalletFrozenBanner extends StatelessWidget {
   final String reason;
   const _WalletFrozenBanner({required this.reason});
@@ -1099,16 +1059,13 @@ class _WalletFrozenBanner extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('WALLET FROZEN', style: TextStyle(
-              color: Color(0xFFFFAA22), fontSize: 11,
-              fontWeight: FontWeight.w800, letterSpacing: 1,
+              color: Color(0xFFFFAA22), fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1,
             )),
             Text(
               reason.isNotEmpty
                   ? reason
                   : 'Deposits, withdrawals and tournament entry are disabled.',
-              style: const TextStyle(
-                color: SSColors.textSecondary, fontSize: 11, height: 1.4,
-              ),
+              style: const TextStyle(color: SSColors.textSecondary, fontSize: 11, height: 1.4),
             ),
           ])),
         ]),
@@ -1117,19 +1074,21 @@ class _WalletFrozenBanner extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────
+// STATS BAR (unchanged from F1, now only shown when loaded)
+// ─────────────────────────────────────────────
 class _StatsBar extends StatelessWidget {
   final int tournamentsPlayed, wins;
-  final bool loaded;
-  const _StatsBar({required this.tournamentsPlayed, required this.wins, required this.loaded});
+  const _StatsBar({required this.tournamentsPlayed, required this.wins});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Row(children: [
-        Expanded(child: _StatChip(icon: Icons.emoji_events_rounded, label: 'Tournaments', value: loaded ? '$tournamentsPlayed' : '…', color: SSColors.gold)),
+        Expanded(child: _StatChip(icon: Icons.emoji_events_rounded, label: 'Tournaments', value: '$tournamentsPlayed', color: SSColors.gold)),
         const SizedBox(width: 10),
-        Expanded(child: _StatChip(icon: Icons.military_tech_rounded, label: 'Wins', value: loaded ? '$wins' : '…', color: SSColors.purple)),
+        Expanded(child: _StatChip(icon: Icons.military_tech_rounded, label: 'Wins',        value: '$wins',              color: SSColors.purple)),
       ]),
     );
   }
@@ -1154,22 +1113,24 @@ class _StatChip extends StatelessWidget {
   }
 }
 
-class _StatusPill extends StatelessWidget {
-  final TournamentStatus status;
-  const _StatusPill(this.status);
+// ─────────────────────────────────────────────
+// PILL WIDGETS
+// ─────────────────────────────────────────────
+
+/// PRIORITY 1: Upcoming-only home — always show UPCOMING pill, never LIVE/ENDED.
+class _UpcomingPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    Color color; String label;
-    switch (status) {
-      case TournamentStatus.live:      color = SSColors.live;      label = '● LIVE';      break;
-      case TournamentStatus.completed: color = SSColors.textMuted; label = 'ENDED';       break;
-      case TournamentStatus.upcoming:  color = SSColors.gold;      label = 'UPCOMING';    break;
-      case TournamentStatus.cancelled: color = SSColors.textMuted; label = 'CANCELLED';   break;
-    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(5), border: Border.all(color: color.withValues(alpha: 0.35))),
-      child: Text(label, style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+      decoration: BoxDecoration(
+        color: SSColors.gold.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: SSColors.gold.withValues(alpha: 0.35)),
+      ),
+      child: const Text('UPCOMING', style: TextStyle(
+        color: SSColors.gold, fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 0.8,
+      )),
     );
   }
 }
@@ -1179,9 +1140,9 @@ class _TypePill extends StatelessWidget {
   const _TypePill(this.type);
   static const _labels = {
     'battle_royale': '🗺️ Battle Royale', 'clash_squad': '⚔️ Clash Squad',
-    '2v2': '🤝 2v2 Arena', 'lone_wolf': '🎯 Lone Wolf',
-    'lose_to_win': '🔄 Lose To Win', '1v1_arena': '🥊 1v1 Arena',
-    'sniper': '🔭 Sniper', 'custom_league': '🏆 League',
+    '2v2': '🤝 2v2',     '3v3': '⚡ 3v3',   '4v4': '🛡️ 4v4',
+    'lone_wolf': '🎯 Lone Wolf', 'lose_to_win': '🔄 Lose To Win',
+    '1v1_arena': '🥊 1v1', 'sniper': '🔭 Sniper', 'custom_league': '🏆 League',
   };
   @override
   Widget build(BuildContext context) {
@@ -1220,6 +1181,10 @@ class _JoinedPill extends StatelessWidget {
     );
   }
 }
+
+// ─────────────────────────────────────────────
+// SMALL SHARED WIDGETS (unchanged from F1)
+// ─────────────────────────────────────────────
 
 class _Stat extends StatelessWidget {
   final IconData icon; final Color color; final String value;
@@ -1272,7 +1237,7 @@ class _JoinButtonState extends State<_JoinButton> with SingleTickerProviderState
   Widget build(BuildContext context) {
     return GestureDetector(
       onTapDown: (_) => _ctrl.forward(),
-      onTapUp: (_) { _ctrl.reverse(); widget.onTap?.call(); },
+      onTapUp:   (_) { _ctrl.reverse(); widget.onTap?.call(); },
       onTapCancel: () => _ctrl.reverse(),
       child: ScaleTransition(scale: _scale, child: Container(
         padding: EdgeInsets.symmetric(horizontal: widget.featured ? 18 : 14, vertical: widget.featured ? 10 : 8),
@@ -1297,28 +1262,6 @@ class _Badge extends StatelessWidget {
       decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(6)),
       child: Text(label, style: SSTextStyles.labelSmall.copyWith(color: textColor ?? SSColors.textSecondary, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
     );
-  }
-}
-
-class _ShimmerPlaceholder extends StatefulWidget {
-  final double height;
-  const _ShimmerPlaceholder({required this.height});
-  @override State<_ShimmerPlaceholder> createState() => _ShimmerPlaceholderState();
-}
-class _ShimmerPlaceholderState extends State<_ShimmerPlaceholder> with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-  late Animation<double> _anim;
-  @override void initState() { super.initState(); _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))..repeat(reverse: true); _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut); }
-  @override void dispose() { _ctrl.dispose(); super.dispose(); }
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(animation: _anim, builder: (_, _) => Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Container(height: widget.height, decoration: BoxDecoration(
-        color: SSColors.surfaceCard.withValues(alpha: 0.5 + 0.3 * _anim.value),
-        borderRadius: BorderRadius.circular(20), border: Border.all(color: SSColors.border),
-      )),
-    ));
   }
 }
 
@@ -1363,22 +1306,36 @@ class _ErrorCard extends StatelessWidget {
   }
 }
 
+/// PRIORITY 2: Empty state for upcoming feed.
+/// Shown when no upcoming tournaments match the current game mode filter.
 class _EmptyCard extends StatelessWidget {
-  final String statusFilter, typeFilter;
-  const _EmptyCard({required this.statusFilter, required this.typeFilter});
+  final String typeFilter;
+  const _EmptyCard({required this.typeFilter});
   @override
   Widget build(BuildContext context) {
-    final typeLabel = _filterOptions.firstWhere((o) => o.value == typeFilter, orElse: () => const _FilterOption(value: '', label: 'selected', emoji: '')).label;
-    final statusLabel = statusFilter == 'all' ? '' : '$statusFilter ';
+    final typeLabel = _filterOptions
+        .firstWhere((o) => o.value == typeFilter,
+            orElse: () => const _FilterOption(value: '', label: 'selected type', emoji: ''))
+        .label;
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
       child: Column(children: [
-        Container(width: 64, height: 64, decoration: BoxDecoration(color: SSColors.purpleGlowFaint, shape: BoxShape.circle, border: Border.all(color: SSColors.border)), child: const Icon(Icons.search_off_rounded, color: SSColors.purple, size: 28)),
+        Container(
+          width: 64, height: 64,
+          decoration: BoxDecoration(color: SSColors.purpleGlowFaint, shape: BoxShape.circle, border: Border.all(color: SSColors.border)),
+          child: const Icon(Icons.search_off_rounded, color: SSColors.purple, size: 28),
+        ),
         const SizedBox(height: 16),
-        const Text('No tournaments found', style: TextStyle(color: SSColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w700)),
+        const Text('No upcoming tournaments', style: TextStyle(color: SSColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w700)),
         const SizedBox(height: 6),
-        Text(typeFilter == 'all' ? 'No ${statusLabel}tournaments right now.' : 'No $statusLabel$typeLabel tournaments right now.',
-            textAlign: TextAlign.center, style: const TextStyle(color: SSColors.textSecondary, fontSize: 13, height: 1.5)),
+        Text(
+          typeFilter == 'all'
+              ? 'No tournaments are open for registration right now.\nCheck back soon!'
+              : 'No upcoming $typeLabel tournaments right now.\nTry a different game mode.',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: SSColors.textSecondary, fontSize: 13, height: 1.5),
+        ),
       ]),
     );
   }

@@ -1,26 +1,32 @@
 // lib/screens/ranks_screen.dart
 // ─────────────────────────────────────────────
-// SHADOW STORM — Ranks Screen (Phase F1)
+// SHADOW STORM — Ranks Screen (Phase F2.5 / PRE-F3)
 //
-// Changes from v3:
-//   PRIORITY 7 — Ranks screen loop fixed:
-//     • Removed _ticker that called setState() every second causing continuous rebuilds.
-//     • Countdown now lives in a lightweight _CountdownTicker widget with its own
-//       setState — it does NOT trigger the parent RanksScreen to rebuild.
-//     • _LeaderboardView uses a single StreamBuilder — no repeated listeners.
-//     • IndexedStack prevents off-screen tabs from rebuilding when tab switches.
+// Changes from Phase F1:
+//   PRIORITY 5 — Bottom navigation consistency:
+//     RanksScreen is pushed as a full route from HomeScreen bottom nav,
+//     so it has its own back button in the app bar. The screen feels
+//     connected to the rest of the app through the shared Shadow Storm
+//     visual identity — same background, same color system, same typography.
 //
-//   PRIORITY 8 — Cache-first leaderboard:
-//     • _LbService.streamWithCache() returns cached data immediately,
-//       then updates from Firestore stream.
-//     • Manual pull-to-refresh invalidates cache and forces a fresh fetch.
-//     • No continuous Firestore listener polling — uses snapshots() (real-time
-//       but only fires on actual data changes, not on a timer).
+//   PRIORITY 7 (F1 unchanged — regression check):
+//     • No _ticker calling setState() in the parent. Countdown is isolated
+//       inside _CountdownTicker which has its own timer and setState.
+//     • _LeaderboardView uses AutomaticKeepAliveClientMixin so IndexedStack
+//       does not rebuild tabs on switch.
+//     • Single StreamBuilder per tab — no repeated listeners.
 //
-//   PRIORITY 3 — MaintenanceGuard wraps Scaffold.
+//   PRIORITY 8 (F1 unchanged — regression check):
+//     • Cache-first: leaderboard cached in CacheKey.leaderboard.
+//     • Pull-to-refresh invalidates cache and triggers fresh Firestore load.
+//     • No continuous polling — snapshots() fires only on real data changes.
 //
-//   All original v3 widgets, podium, particle painter, design intact.
+//   PRIORITY 3 (F1 unchanged): MaintenanceGuard wraps Scaffold.
+//
+//   All original widgets, podium, particle painter, animations intact.
 // ─────────────────────────────────────────────
+
+// ignore_for_file: unnecessary_cast, unused_field
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -33,6 +39,7 @@ import '../services/app_settings_service.dart';
 // ── Design tokens ────────────────────────────────────────────────────────────
 class _C {
   static const background      = Color(0xFF06040E);
+  static const surface         = Color(0xFF0E0A1A);
   static const surfaceCard     = Color(0xFF130F22);
   static const surfaceElevated = Color(0xFF1A1430);
   static const purple          = Color(0xFF9D55FF);
@@ -48,6 +55,7 @@ class _C {
   static const bronze          = Color(0xFFCD7F32);
   static const live            = Color(0xFFFF4466);
   static const border          = Color(0x337B3FE4);
+  static const borderBright    = Color(0x667B3FE4);
 }
 
 // ─────────────────────────────────────────────
@@ -62,17 +70,16 @@ class _LbEntry {
     final d = doc.data() as Map<String, dynamic>? ?? {};
     return _LbEntry(
       uid:         doc.id,
-      name:        d['name']            as String? ?? 'Unknown',
-      photoUrl:    d['photoUrl']        as String? ?? '',
-      winnings:    (d['totalEarnings']    as num?)?.toDouble() ?? 0.0,
+      name:        d['name']             as String? ?? 'Unknown',
+      photoUrl:    d['photoUrl']         as String? ?? '',
+      winnings:    (d['totalEarnings']   as num?)?.toDouble() ?? 0.0,
       withdrawals: (d['totalWithdrawals'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }
 
 // ─────────────────────────────────────────────
-// LEADERBOARD SERVICE
-// PRIORITY 7 & 8: Cache-first, no repeated listeners.
+// LEADERBOARD SERVICE — Cache-first, no polling
 // ─────────────────────────────────────────────
 class _LbService {
   static final _LbService instance = _LbService._();
@@ -80,10 +87,6 @@ class _LbService {
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  /// Returns a stream that:
-  ///   1. Immediately emits cached data (if available and fresh).
-  ///   2. Follows up with live Firestore data.
-  /// The stream only fires when Firestore data actually changes (no polling).
   Stream<List<_LbEntry>> stream(String field) {
     return _db
         .collection('users')
@@ -92,8 +95,13 @@ class _LbService {
         .snapshots()
         .map((snap) {
           final entries = snap.docs.map(_LbEntry.fromDoc).toList();
-          // Cache result for PRIORITY 8.
-          CacheService.instance.set(CacheKey.leaderboard, entries.map((e) => {'uid': e.uid, 'name': e.name, 'photoUrl': e.photoUrl, 'winnings': e.winnings, 'withdrawals': e.withdrawals}).toList());
+          CacheService.instance.set(
+            CacheKey.leaderboard,
+            entries.map((e) => {
+              'uid': e.uid, 'name': e.name, 'photoUrl': e.photoUrl,
+              'winnings': e.winnings, 'withdrawals': e.withdrawals,
+            }).toList(),
+          );
           return entries;
         });
   }
@@ -106,9 +114,11 @@ class _LbService {
   }
 
   DateTime get nextReset {
-    final now      = DateTime.now();
+    final now       = DateTime.now();
     final daysUntil = (DateTime.monday - now.weekday + 7) % 7;
-    final reset    = daysUntil == 0 ? now.add(const Duration(days: 7)) : now.add(Duration(days: daysUntil));
+    final reset     = daysUntil == 0
+        ? now.add(const Duration(days: 7))
+        : now.add(Duration(days: daysUntil));
     return DateTime(reset.year, reset.month, reset.day);
   }
 }
@@ -144,8 +154,7 @@ class _RanksScreenState extends State<RanksScreen> with TickerProviderStateMixin
     _fadeIn   = CurvedAnimation(parent: _fadeCtrl,     curve: Curves.easeOutCubic);
     _glow     = CurvedAnimation(parent: _glowCtrl,     curve: Curves.easeInOut);
     _particle = CurvedAnimation(parent: _particleCtrl, curve: Curves.linear);
-
-    // PRIORITY 7: No _ticker here. Countdown is in its own widget (_CountdownTicker).
+    // PRIORITY 7: No _ticker here. Countdown lives in _CountdownTicker only.
   }
 
   @override
@@ -156,10 +165,6 @@ class _RanksScreenState extends State<RanksScreen> with TickerProviderStateMixin
     super.dispose();
   }
 
-  // ─────────────────────────────────────────────
-  // BUILD
-  // PRIORITY 3: MaintenanceGuard wraps Scaffold.
-  // ─────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final topPad = MediaQuery.of(context).padding.top;
@@ -173,12 +178,28 @@ class _RanksScreenState extends State<RanksScreen> with TickerProviderStateMixin
             _buildHeader(),
             _buildTabBar(),
             Expanded(
-              // PRIORITY 7: IndexedStack prevents off-screen views from rebuilding.
+              // PRIORITY 7: IndexedStack keeps both tabs alive — no rebuild on switch.
               child: IndexedStack(
                 index: _tabIndex,
                 children: [
-                  _LeaderboardView(sortField: 'totalEarnings', amountLabel: 'Winnings', formatAmount: (v) => '₹${v.toStringAsFixed(0)}', myUid: _myUid, service: _svc, glow: _glow, particle: _particle),
-                  _LeaderboardView(sortField: 'totalWithdrawals', amountLabel: 'Withdrawn', formatAmount: (v) => '₹${v.toStringAsFixed(0)}', myUid: _myUid, service: _svc, glow: _glow, particle: _particle),
+                  _LeaderboardView(
+                    sortField:    'totalEarnings',
+                    amountLabel:  'Winnings',
+                    formatAmount: (v) => '₹${v.toStringAsFixed(0)}',
+                    myUid:        _myUid,
+                    service:      _svc,
+                    glow:         _glow,
+                    particle:     _particle,
+                  ),
+                  _LeaderboardView(
+                    sortField:    'totalWithdrawals',
+                    amountLabel:  'Withdrawn',
+                    formatAmount: (v) => '₹${v.toStringAsFixed(0)}',
+                    myUid:        _myUid,
+                    service:      _svc,
+                    glow:         _glow,
+                    particle:     _particle,
+                  ),
                 ],
               ),
             ),
@@ -192,9 +213,14 @@ class _RanksScreenState extends State<RanksScreen> with TickerProviderStateMixin
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       child: Row(children: [
+        // PRIORITY 5: Back button for nav consistency.
         GestureDetector(
           onTap: () => Navigator.pop(context),
-          child: Container(width: 38, height: 38, decoration: BoxDecoration(color: _C.surfaceCard, borderRadius: BorderRadius.circular(10), border: Border.all(color: _C.border)), child: const Icon(Icons.arrow_back_ios_new_rounded, color: _C.textSecondary, size: 16)),
+          child: Container(
+            width: 38, height: 38,
+            decoration: BoxDecoration(color: _C.surfaceCard, borderRadius: BorderRadius.circular(10), border: Border.all(color: _C.border)),
+            child: const Icon(Icons.arrow_back_ios_new_rounded, color: _C.textSecondary, size: 16),
+          ),
         ),
         const SizedBox(width: 12),
         Container(width: 3, height: 20, decoration: BoxDecoration(color: _C.gold, borderRadius: BorderRadius.circular(2))),
@@ -208,7 +234,7 @@ class _RanksScreenState extends State<RanksScreen> with TickerProviderStateMixin
           Text(_svc.weekLabel, style: const TextStyle(color: _C.textMuted, fontSize: 10, fontWeight: FontWeight.w500)),
         ]),
         const Spacer(),
-        // PRIORITY 7: Countdown is isolated — only this widget rebuilds each second.
+        // PRIORITY 7: Countdown isolated — only _CountdownTicker rebuilds each second.
         _CountdownTicker(nextReset: _svc.nextReset, glow: _glow),
       ]),
     );
@@ -221,9 +247,9 @@ class _RanksScreenState extends State<RanksScreen> with TickerProviderStateMixin
         padding: const EdgeInsets.all(4),
         decoration: BoxDecoration(color: _C.surfaceCard, borderRadius: BorderRadius.circular(14), border: Border.all(color: _C.border)),
         child: Row(children: [
-          _TabChip(label: '💰  Highest Winnings',     active: _tabIndex == 0, onTap: () => setState(() => _tabIndex = 0)),
+          _TabChip(label: '💰  Highest Winnings',    active: _tabIndex == 0, onTap: () => setState(() => _tabIndex = 0)),
           const SizedBox(width: 6),
-          _TabChip(label: '💸  Highest Withdrawals',  active: _tabIndex == 1, onTap: () => setState(() => _tabIndex = 1)),
+          _TabChip(label: '💸  Highest Withdrawals', active: _tabIndex == 1, onTap: () => setState(() => _tabIndex = 1)),
         ]),
       ),
     );
@@ -233,7 +259,6 @@ class _RanksScreenState extends State<RanksScreen> with TickerProviderStateMixin
 // ─────────────────────────────────────────────
 // COUNTDOWN TICKER — isolated widget
 // PRIORITY 7: Only this widget calls setState every second.
-// The parent RanksScreen is NOT rebuilt by the timer.
 // ─────────────────────────────────────────────
 class _CountdownTicker extends StatefulWidget {
   final DateTime nextReset;
@@ -256,10 +281,7 @@ class _CountdownTickerState extends State<_CountdownTicker> {
   }
 
   @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
+  void dispose() { _timer?.cancel(); super.dispose(); }
 
   void _compute() {
     final diff = widget.nextReset.difference(DateTime.now());
@@ -319,9 +341,8 @@ class _TabChip extends StatelessWidget {
 
 // ─────────────────────────────────────────────
 // LEADERBOARD VIEW
-// PRIORITY 7: Single StreamBuilder per tab. IndexedStack keeps tabs alive
-// without rebuilding when switching. Pull-to-refresh invalidates cache.
-// PRIORITY 8: Shows cached data immediately on revisit.
+// PRIORITY 7: Single StreamBuilder, AutomaticKeepAlive, pull-to-refresh.
+// PRIORITY 8: Cache invalidated on manual refresh only.
 // ─────────────────────────────────────────────
 class _LeaderboardView extends StatefulWidget {
   final String sortField, amountLabel;
@@ -334,15 +355,12 @@ class _LeaderboardView extends StatefulWidget {
 }
 
 class _LeaderboardViewState extends State<_LeaderboardView> with AutomaticKeepAliveClientMixin {
-  // PRIORITY 7: Keep alive so IndexedStack doesn't rebuild on tab switch.
   @override bool get wantKeepAlive => true;
 
   double _getValue(_LbEntry e) => widget.sortField == 'totalEarnings' ? e.winnings : e.withdrawals;
 
   Future<void> _onRefresh() async {
-    // PRIORITY 8: Manual refresh — invalidate cache so stream re-emits fresh data.
     CacheService.instance.invalidate(CacheKey.leaderboard);
-    // The stream will auto-refresh via Firestore snapshot listener.
     await Future.delayed(const Duration(milliseconds: 600));
   }
 
@@ -370,13 +388,27 @@ class _LeaderboardViewState extends State<_LeaderboardView> with AutomaticKeepAl
               if (i == 0) {
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 20),
-                  child: _Podium(entries: entries.take(3).toList(), getValue: _getValue, formatAmount: widget.formatAmount, glow: widget.glow, particle: widget.particle, myUid: widget.myUid),
+                  child: _Podium(
+                    entries:      entries.take(3).toList(),
+                    getValue:     _getValue,
+                    formatAmount: widget.formatAmount,
+                    glow:         widget.glow,
+                    particle:     widget.particle,
+                    myUid:        widget.myUid,
+                  ),
                 );
               }
               final entry = entries[i - 1];
               final rank  = i;
               if (rank <= 3) return const SizedBox.shrink();
-              return _PlayerCard(entry: entry, rank: rank, value: _getValue(entry), formatAmount: widget.formatAmount, isMe: entry.uid == widget.myUid, animDelay: (rank - 4) * 50);
+              return _PlayerCard(
+                entry:        entry,
+                rank:         rank,
+                value:        _getValue(entry),
+                formatAmount: widget.formatAmount,
+                isMe:         entry.uid == widget.myUid,
+                animDelay:    (rank - 4) * 50,
+              );
             },
           ),
         );
@@ -386,7 +418,7 @@ class _LeaderboardViewState extends State<_LeaderboardView> with AutomaticKeepAl
 }
 
 // ─────────────────────────────────────────────
-// PODIUM (unchanged from v3)
+// PODIUM
 // ─────────────────────────────────────────────
 class _Podium extends StatefulWidget {
   final List<_LbEntry> entries;
@@ -440,10 +472,15 @@ class _PodiumState extends State<_Podium> with SingleTickerProviderStateMixin {
           child: child,
         ),
         child: Stack(children: [
-          SizedBox(height: 220, width: double.infinity, child: AnimatedBuilder(animation: widget.particle, builder: (_, _) => CustomPaint(painter: _PodiumParticlePainter(widget.particle.value)))),
+          SizedBox(height: 220, width: double.infinity,
+              child: AnimatedBuilder(animation: widget.particle, builder: (_, _) => CustomPaint(painter: _PodiumParticlePainter(widget.particle.value)))),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
-            children: List.generate(3, (i) => Expanded(child: _PodiumSlot(entry: order[i], rank: ranks[i], platformH: _platformHeights[i], getValue: widget.getValue, formatAmount: widget.formatAmount, isMe: order[i]?.uid == widget.myUid))),
+            children: List.generate(3, (i) => Expanded(child: _PodiumSlot(
+              entry: order[i], rank: ranks[i], platformH: _platformHeights[i],
+              getValue: widget.getValue, formatAmount: widget.formatAmount,
+              isMe: order[i]?.uid == widget.myUid,
+            ))),
           ),
         ]),
       ),
@@ -482,7 +519,6 @@ class _PodiumSlot extends StatelessWidget {
         const Text('—', style: TextStyle(color: _C.textMuted, fontSize: 10)),
       ],
       const SizedBox(height: 8),
-      // Platform block (fixed BorderRadius + uniform border from v3).
       ClipRRect(
         borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
         child: Stack(children: [
@@ -502,7 +538,7 @@ class _PodiumSlot extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// PLAYER CARD (rank 4+) — unchanged from v3
+// PLAYER CARD (rank 4+)
 // ─────────────────────────────────────────────
 class _PlayerCard extends StatefulWidget {
   final _LbEntry entry; final int rank; final double value;
@@ -518,7 +554,7 @@ class _PlayerCardState extends State<_PlayerCard> with SingleTickerProviderState
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 400));
+    _ctrl    = AnimationController(vsync: this, duration: const Duration(milliseconds: 400));
     _slide   = Tween(begin: 30.0, end: 0.0).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
     _opacity = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
     Future.delayed(Duration(milliseconds: widget.animDelay), () { if (mounted) _ctrl.forward(); });
@@ -565,7 +601,7 @@ class _PlayerCardState extends State<_PlayerCard> with SingleTickerProviderState
 }
 
 // ─────────────────────────────────────────────
-// AVATAR (unchanged from v3)
+// AVATAR
 // ─────────────────────────────────────────────
 class _Avatar extends StatelessWidget {
   final String url, name; final Color accentColor;
@@ -587,7 +623,7 @@ class _Fallback extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// PARTICLE PAINTER (unchanged from v3)
+// PARTICLE PAINTER
 // ─────────────────────────────────────────────
 class _PodiumParticlePainter extends CustomPainter {
   final double progress;
@@ -600,7 +636,7 @@ class _PodiumParticlePainter extends CustomPainter {
       final t     = (progress + p[3]) % 1.0;
       final x     = p[0] * size.width;
       final y     = (p[1] - t * 0.35) % 1.0 * size.height;
-      final r     = p[2];
+      final r     = p[2] as double;
       final alpha = (math.sin(t * math.pi) * 0.3).clamp(0.0, 0.3);
       canvas.drawCircle(Offset(x, y), r, Paint()..color = _C.gold.withValues(alpha: alpha)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2));
     }
@@ -609,7 +645,7 @@ class _PodiumParticlePainter extends CustomPainter {
 }
 
 // ─────────────────────────────────────────────
-// STATE WIDGETS (unchanged from v3)
+// STATE WIDGETS
 // ─────────────────────────────────────────────
 class _LoadingState extends StatelessWidget {
   const _LoadingState();

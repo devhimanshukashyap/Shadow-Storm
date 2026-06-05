@@ -1,17 +1,21 @@
 // lib/models/team_slot_model.dart
 // ─────────────────────────────────────────────
-// SHADOW STORM — Team Slot Model
+// SHADOW STORM — Team Slot Model (Phase F2.5 / PRE-F3)
+//
 // Represents one player slot in a team registration.
 // Slot 0 is always the squad leader (auto-filled from user profile).
-// Slots 1+ are filled manually by the leader.
+// Slots 1+ are filled manually by the leader for teammates.
+//
+// Stored in Firestore at:
+//   tournaments/{id}/participants/{uid}/teamSlots[]
 // ─────────────────────────────────────────────
 
 class TeamSlot {
   final int     slotIndex;   // 0 = squad leader (always the joining user)
-  final String  gameUid;     // in-game UID entered by the leader
-  final String  ign;         // in-game name entered by the leader
+  final String  gameUid;     // in-game UID
+  final String  ign;         // in-game name
   final String? userId;      // Firebase UID — only set for slot 0 or registered SS users
-  final String? readableId;  // SS-XXXXXX — only set for registered SS users
+  final String? readableId;  // SSP-XXXXXX — only set for registered SS users
 
   const TeamSlot({
     required this.slotIndex,
@@ -55,4 +59,7 @@ class TeamSlot {
     userId:     userId     ?? this.userId,
     readableId: readableId ?? this.readableId,
   );
+
+  @override
+  String toString() => 'TeamSlot(idx=$slotIndex, uid=$gameUid, ign=$ign)';
 }

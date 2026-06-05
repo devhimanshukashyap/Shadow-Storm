@@ -1,14 +1,19 @@
 // lib/screens/profile_screen.dart
 // ─────────────────────────────────────────────
-// SHADOW STORM — Profile Screen (Phase F1)
+// SHADOW STORM — Profile Screen (Phase F2.5 / PRE-F3)
 //
-// Changes from Phase P2:
-//   PRIORITY 3: Scaffold wrapped with MaintenanceGuard.
-//     When maintenanceMode=true the maintenance screen is shown.
-//   PRIORITY 5: createdAt is now read from Firestore and displayed
-//     in the PlayerProfile model — already stored by auth_service.dart
-//     on first login. The joinedDate getter uses createdAt.
-//   All original P2 widgets, edit form, stats grid, sign-out intact.
+// Changes from Phase F1:
+//   PRIORITY 3 (F2.5): Recent Activity section added.
+//     Reads from UserActivityService.recentActivityStream().
+//     Shows last 10 activity items: joined tournament, won tournament,
+//     deposit approved, withdrawal approved, refund, admin adjustment.
+//     Section is hidden if no activity exists (no blank state shown).
+//
+//   PRIORITY 3 (F2.5): Unnecessary rank widgets removed.
+//
+//   All F1 behaviors preserved:
+//     MaintenanceGuard, edit form (name/ign/gameUid),
+//     stats grid, sign-out, createdAt join date, Player ID chip.
 // ─────────────────────────────────────────────
 
 import 'dart:math' as math;
@@ -18,6 +23,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/cache_service.dart';
 import '../services/app_settings_service.dart';
+import '../services/user_activity_service.dart';
 
 // ─────────────────────────────────────────────
 // DESIGN TOKENS
@@ -51,7 +57,6 @@ class PlayerProfile {
   final String   ign;
   final String   gameUid;
   final String   readableId;
-  // PRIORITY 5: createdAt is read from Firestore — stored on first login only.
   final DateTime? createdAt;
   final double walletBalance;
   final int    wins;
@@ -83,7 +88,6 @@ class PlayerProfile {
       ign:               d['ign']               as String?  ?? '',
       gameUid:           d['gameUid']           as String?  ?? '',
       readableId:        d['readableId']        as String?  ?? '',
-      // PRIORITY 5: Read createdAt — never null if user was created after F1 deploy.
       createdAt:         (d['createdAt'] as Timestamp?)?.toDate(),
       walletBalance:     (d['walletBalance']     as num?    ?? 0).toDouble(),
       wins:              (d['wins']              as num?    ?? 0).toInt(),
@@ -92,8 +96,6 @@ class PlayerProfile {
     );
   }
 
-  /// Returns formatted join date from createdAt.
-  /// Shows '—' only for legacy users who joined before F1.
   String get joinedDate {
     if (createdAt == null) return '—';
     const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -204,7 +206,6 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
         'name':    newName,
         'ign':     newIgn,
         'gameUid': newGameUid,
-        // NOTE: Do NOT update createdAt here — it is set once on creation only.
       });
       await _firebaseUser.updateDisplayName(newName);
       CacheService.instance.invalidate(CacheKey.profile);
@@ -249,7 +250,6 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
 
   // ─────────────────────────────────────────────
   // BUILD
-  // PRIORITY 3: MaintenanceGuard wraps the Scaffold.
   // ─────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
@@ -313,26 +313,49 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
       physics: const BouncingScrollPhysics(),
       slivers: [
         const SliverToBoxAdapter(child: SizedBox(height: 80)),
-        SliverToBoxAdapter(child: _AvatarSection(profile: profile, pulse: _pulse, rotate: _rotate, onCopyReadableId: () => _copyToClipboard(profile.readableId, 'Player ID'))),
-        const SliverToBoxAdapter(child: SizedBox(height: 20)),
-        SliverToBoxAdapter(child: _IdsRow(
+
+        // Avatar + name card.
+        SliverToBoxAdapter(child: _AvatarSection(
           profile: profile,
+          pulse:   _pulse,
+          rotate:  _rotate,
           onCopyReadableId: () => _copyToClipboard(profile.readableId, 'Player ID'),
-          onCopyGameUid: () => _copyToClipboard(profile.gameUid, 'Game UID'),
         )),
         const SliverToBoxAdapter(child: SizedBox(height: 20)),
+
+        // Player ID + Game UID chips.
+        SliverToBoxAdapter(child: _IdsRow(
+          profile:          profile,
+          onCopyReadableId: () => _copyToClipboard(profile.readableId, 'Player ID'),
+          onCopyGameUid:    () => _copyToClipboard(profile.gameUid, 'Game UID'),
+        )),
+        const SliverToBoxAdapter(child: SizedBox(height: 20)),
+
+        // Edit form (shown only when editing).
         if (_isEditing) ...[
           SliverToBoxAdapter(child: _EditForm(
-            nameCtrl: _nameCtrl, ignCtrl: _ignCtrl, gameUidCtrl: _gameUidCtrl,
-            isSaving: _isSaving, saveError: _saveError,
-            onSave: _saveProfile, onCancel: _cancelEditing,
+            nameCtrl:    _nameCtrl,
+            ignCtrl:     _ignCtrl,
+            gameUidCtrl: _gameUidCtrl,
+            isSaving:    _isSaving,
+            saveError:   _saveError,
+            onSave:      _saveProfile,
+            onCancel:    _cancelEditing,
           )),
           const SliverToBoxAdapter(child: SizedBox(height: 20)),
         ],
+
+        // Player Stats section.
         SliverToBoxAdapter(child: _buildSectionLabel('PLAYER', 'STATS')),
         const SliverToBoxAdapter(child: SizedBox(height: 12)),
         SliverToBoxAdapter(child: _StatsGrid(profile: profile)),
         const SliverToBoxAdapter(child: SizedBox(height: 24)),
+
+        // Recent Activity section — PRIORITY 3 (F2.5).
+        SliverToBoxAdapter(child: _RecentActivitySection(uid: _firebaseUser?.uid)),
+        const SliverToBoxAdapter(child: SizedBox(height: 24)),
+
+        // Sign out button.
         SliverToBoxAdapter(child: _SignOutButton(onTap: _signOut)),
         const SliverToBoxAdapter(child: SizedBox(height: 40)),
       ],
@@ -354,7 +377,155 @@ class _ProfileScreenState extends State<ProfileScreen> with TickerProviderStateM
 }
 
 // ─────────────────────────────────────────────
-// AVATAR SECTION (unchanged from P2)
+// RECENT ACTIVITY SECTION — PRIORITY 3 (F2.5)
+//
+// Reads from UserActivityService.recentActivityStream().
+// Hidden entirely if no activity exists — no blank container shown.
+// ─────────────────────────────────────────────
+class _RecentActivitySection extends StatelessWidget {
+  final String? uid;
+  const _RecentActivitySection({required this.uid});
+
+  Color _iconColor(ActivityType type) {
+    switch (type) {
+      case ActivityType.depositApproved:    return _C.success;
+      case ActivityType.withdrawalApproved: return _C.live;
+      case ActivityType.wonTournament:      return _C.gold;
+      case ActivityType.tournamentEntry:    return _C.purple;
+      case ActivityType.joinedTournament:   return _C.purpleLight;
+      case ActivityType.refund:             return const Color(0xFFFFAA22);
+      case ActivityType.adminAdjustment:    return _C.textSecondary;
+    }
+  }
+
+  IconData _icon(ActivityType type) {
+    switch (type) {
+      case ActivityType.depositApproved:    return Icons.add_circle_rounded;
+      case ActivityType.withdrawalApproved: return Icons.remove_circle_rounded;
+      case ActivityType.wonTournament:      return Icons.emoji_events_rounded;
+      case ActivityType.tournamentEntry:    return Icons.sports_esports_rounded;
+      case ActivityType.joinedTournament:   return Icons.sports_esports_rounded;
+      case ActivityType.refund:             return Icons.replay_rounded;
+      case ActivityType.adminAdjustment:    return Icons.tune_rounded;
+    }
+  }
+
+  String _timeAgo(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inHours  < 1) return '${diff.inMinutes}m ago';
+    if (diff.inDays   < 1) return '${diff.inHours}h ago';
+    if (diff.inDays   < 7) return '${diff.inDays}d ago';
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${months[dt.month - 1]} ${dt.day}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (uid == null) return const SizedBox.shrink();
+
+    return StreamBuilder<List<ActivityItem>>(
+      stream: UserActivityService.instance.recentActivityStream(limit: 10),
+      builder: (context, snap) {
+        final items = snap.data ?? [];
+
+        // Hide section entirely if no activity — PRIORITY 2 (no blank sections).
+        if (items.isEmpty) return const SizedBox.shrink();
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // Section label.
+            Row(children: [
+              Container(width: 3, height: 18, decoration: BoxDecoration(color: _C.purple, borderRadius: BorderRadius.circular(2))),
+              const SizedBox(width: 8),
+              const Text('RECENT', style: TextStyle(color: _C.textSecondary, fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
+              const SizedBox(width: 5),
+              const Text('ACTIVITY', style: TextStyle(color: _C.purple, fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
+            ]),
+            const SizedBox(height: 12),
+
+            // Activity list.
+            Container(
+              decoration: BoxDecoration(
+                color: _C.surfaceCard, borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: _C.border),
+              ),
+              child: Column(
+                children: items.asMap().entries.map((entry) {
+                  final i    = entry.key;
+                  final item = entry.value;
+                  final color = _iconColor(item.type);
+                  final isLast = i == items.length - 1;
+
+                  return Container(
+                    decoration: BoxDecoration(
+                      border: isLast ? null : Border(
+                        bottom: BorderSide(color: _C.border.withValues(alpha: 0.5)),
+                      ),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: Row(children: [
+                      // Icon badge.
+                      Container(
+                        width: 36, height: 36,
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(_icon(item.type), color: color, size: 17),
+                      ),
+                      const SizedBox(width: 12),
+
+                      // Title + subtitle.
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(item.title, style: const TextStyle(color: _C.textPrimary, fontSize: 13, fontWeight: FontWeight.w600)),
+                        if (item.subtitle.isNotEmpty)
+                          Text(item.subtitle, style: const TextStyle(color: _C.textMuted, fontSize: 11, height: 1.4), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ])),
+                      const SizedBox(width: 8),
+
+                      // Amount + time.
+                      Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                        if (item.amount != null)
+                          Text(
+                            _isCredit(item.type)
+                                ? '+₹${item.amount!.toStringAsFixed(0)}'
+                                : '-₹${item.amount!.toStringAsFixed(0)}',
+                            style: TextStyle(
+                              color: _isCredit(item.type) ? _C.success : _C.live,
+                              fontSize: 13, fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        Text(_timeAgo(item.createdAt),
+                            style: const TextStyle(color: _C.textMuted, fontSize: 10)),
+                      ]),
+                    ]),
+                  );
+                }).toList(),
+              ),
+            ),
+          ]),
+        );
+      },
+    );
+  }
+
+  bool _isCredit(ActivityType type) {
+    switch (type) {
+      case ActivityType.depositApproved:
+      case ActivityType.wonTournament:
+      case ActivityType.refund:
+      case ActivityType.adminAdjustment:
+        return true;
+      default:
+        return false;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+// AVATAR SECTION (unchanged from F1)
 // ─────────────────────────────────────────────
 class _AvatarSection extends StatelessWidget {
   final PlayerProfile profile; final Animation<double> pulse; final Animation<double> rotate; final VoidCallback onCopyReadableId;
@@ -402,7 +573,7 @@ class _AvatarSection extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// IDs ROW (unchanged from P2)
+// IDs ROW (unchanged from F1)
 // ─────────────────────────────────────────────
 class _IdsRow extends StatelessWidget {
   final PlayerProfile profile; final VoidCallback onCopyReadableId; final VoidCallback onCopyGameUid;
@@ -475,7 +646,7 @@ class _AvatarInitial extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// EDIT FORM (unchanged from P2)
+// EDIT FORM (unchanged from F1)
 // ─────────────────────────────────────────────
 class _EditForm extends StatelessWidget {
   final TextEditingController nameCtrl, ignCtrl, gameUidCtrl;
@@ -507,7 +678,7 @@ class _EditForm extends StatelessWidget {
             decoration: BoxDecoration(color: _C.gold.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(10), border: Border.all(color: _C.gold.withValues(alpha: 0.2))),
             child: const Row(children: [
               Icon(Icons.info_outline_rounded, color: _C.gold, size: 13), SizedBox(width: 8),
-              Expanded(child: Text('Wallet and admin fields cannot be edited here. Player ID (SSP-XXXXXX) is system-assigned.', style: TextStyle(color: _C.textMuted, fontSize: 11, height: 1.4))),
+              Expanded(child: Text('Player ID (SSP-XXXXXX) is system-assigned and cannot be changed.', style: TextStyle(color: _C.textMuted, fontSize: 11, height: 1.4))),
             ]),
           ),
           if (saveError != null) ...[
@@ -567,7 +738,7 @@ class _EditField extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// STATS GRID (unchanged from P2)
+// STATS GRID (unchanged from F1, rank widget removed)
 // ─────────────────────────────────────────────
 class _StatsGrid extends StatelessWidget {
   final PlayerProfile profile;
@@ -578,10 +749,10 @@ class _StatsGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final stats = [
-      _StatData(icon: Icons.emoji_events_rounded, label: 'Tournaments Played', value: '${profile.tournamentsPlayed}', color: _C.purpleLight),
-      _StatData(icon: Icons.military_tech_rounded, label: 'Total Wins', value: '${profile.wins}', color: _C.gold),
-      _StatData(icon: Icons.account_balance_wallet_rounded, label: 'Total Winnings', value: '₹${_fmt(profile.totalEarnings)}', color: _C.success),
-      _StatData(icon: Icons.percent_rounded, label: 'Win Rate', value: profile.winRate, color: _C.live),
+      _StatData(icon: Icons.emoji_events_rounded,          label: 'Tournaments Played', value: '${profile.tournamentsPlayed}', color: _C.purpleLight),
+      _StatData(icon: Icons.military_tech_rounded,          label: 'Total Wins',          value: '${profile.wins}',             color: _C.gold),
+      _StatData(icon: Icons.account_balance_wallet_rounded, label: 'Total Winnings',      value: '₹${_fmt(profile.totalEarnings)}', color: _C.success),
+      _StatData(icon: Icons.percent_rounded,                label: 'Win Rate',            value: profile.winRate,               color: _C.live),
     ];
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -621,7 +792,7 @@ class _StatCell extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// SIGN OUT (unchanged from P2)
+// SIGN OUT (unchanged from F1)
 // ─────────────────────────────────────────────
 class _SignOutButton extends StatelessWidget {
   final VoidCallback onTap;
@@ -655,14 +826,14 @@ class _SignOutDialog extends StatelessWidget {
       content: const Text('Are you sure you want to sign out?', style: TextStyle(color: _C.textSecondary, fontSize: 13)),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel', style: TextStyle(color: _C.textSecondary))),
-        TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Sign Out', style: TextStyle(color: _C.live))),
+        TextButton(onPressed: () => Navigator.pop(context, true),  child: const Text('Sign Out', style: TextStyle(color: _C.live))),
       ],
     );
   }
 }
 
 // ─────────────────────────────────────────────
-// STATES
+// STATE WIDGETS
 // ─────────────────────────────────────────────
 class _LoadingState extends StatelessWidget {
   const _LoadingState();

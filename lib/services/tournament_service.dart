@@ -1,26 +1,23 @@
 // lib/services/tournament_service.dart
 // ─────────────────────────────────────────────
-// SHADOW STORM — Tournament Service (Phase F1)
+// SHADOW STORM — Tournament Service (Phase F2.5 / PRE-F3)
 //
-// Changes from v3:
-//   PRIORITY 1 — joinWithTeam() now runs a FULL Firestore transaction:
-//     1. Validate tournament exists
-//     2. Validate status == 'upcoming'
-//     3. Validate joinedPlayers < maxPlayers
-//     4. Validate user is not already registered (duplicate check)
-//     5. Validate walletBalance >= entryFee
-//     6. Deduct walletBalance
-//     7. Increment joinedPlayers
-//     8. Create participant document (inside transaction via txn.set)
-//     9. Create transaction record (type: 'tournament_entry')
-//     All 9 steps commit atomically — nothing is written if any step fails.
+// Changes from Phase F1:
+//   PRIORITY 0 — joinWithTeam() now stores ALL team slots in the participant
+//     document, not just slot 0. The teamSlots array in Firestore contains
+//     every slot submitted by the player (leader + teammates).
 //
-//   PRIORITY 2 — isRoomRevealed() is now the SINGLE source of truth.
-//     Both EventsScreen and TournamentDetailsScreen must call this method.
-//     No duplicate reveal logic anywhere else.
-//     Respects admin-set roomRevealTime if present; falls back to 30min rule.
+//     Fields stored per slot:
+//       slotIndex, gameUid, ign, userId (if known), readableId (if known)
 //
-//   All original v3 streams, helpers, and team slot logic kept intact.
+//     Validation extended:
+//       • All required slots must be non-null.
+//       • Non-leader slots must have non-empty gameUid.
+//       • Duplicate gameUid check across all slots.
+//       • Slot count must meet tournament.requiredSlots minimum.
+//
+//   All other F1 behavior (atomic transaction, 9-step join, isRoomRevealed,
+//   streams, cache invalidation) kept exactly as-is.
 // ─────────────────────────────────────────────
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -45,7 +42,7 @@ class TournamentService {
   Stream<List<TournamentModel>>? _completedStream;
 
   // ──────────────────────────────────────────────────────
-  // REALTIME STREAMS (unchanged from v3)
+  // REALTIME STREAMS (unchanged from F1)
   // ──────────────────────────────────────────────────────
 
   Stream<TournamentModel?> featuredTournamentStream() {
@@ -128,7 +125,7 @@ class TournamentService {
   }
 
   // ──────────────────────────────────────────────────────
-  // PARTICIPANT / JOIN STREAMS (unchanged from v3)
+  // PARTICIPANT / JOIN STREAMS (unchanged from F1)
   // ──────────────────────────────────────────────────────
 
   Stream<Set<String>> joinedTournamentIdsStream(String userId) {
@@ -182,49 +179,31 @@ class TournamentService {
 
   // ──────────────────────────────────────────────────────
   // PRIORITY 2 — ROOM REVEAL SINGLE SOURCE OF TRUTH
-  //
-  // THIS is the only place reveal logic lives.
-  // EventsScreen and TournamentDetailsScreen BOTH call this method.
-  // No other reveal logic should exist in any screen.
-  //
-  // Rules (in priority order):
-  //   1. Completed tournaments: never reveal.
-  //   2. No roomId set: nothing to reveal.
-  //   3. Admin has set roomRevealTime: use that exact time.
-  //   4. Fallback: 30 minutes before startTime.
-  //   5. No startTime and no roomRevealTime: reveal immediately.
+  // (unchanged from F1)
   // ──────────────────────────────────────────────────────
-  bool isRoomRevealed(TournamentModel t) {
-    // Rule 1: completed tournaments never show room.
-    if (t.status == TournamentStatus.completed) return false;
 
-    // Rule 2: no credentials set yet.
+  bool isRoomRevealed(TournamentModel t) {
+    if (t.status == TournamentStatus.completed) return false;
     if (t.roomId == null || t.roomId!.isEmpty) return false;
 
     final now = DateTime.now();
 
-    // Rule 3: admin has explicitly set a reveal time — always respect it.
     if (t.roomRevealTime != null) {
       return now.isAfter(t.roomRevealTime!);
     }
 
-    // Rule 4: fallback to 30 minutes before match start.
     if (t.startTime != null) {
       return now.isAfter(t.startTime!.subtract(const Duration(minutes: 30)));
     }
 
-    // Rule 5: no timing info — reveal.
     return true;
   }
 
   // ──────────────────────────────────────────────────────
-  // PRIORITY 1 — SAFE TOURNAMENT REGISTRATION
-  //
-  // Full atomic Firestore transaction. All 9 steps or nothing.
-  // joinTournament() is a convenience wrapper for solo joins.
+  // SOLO JOIN WRAPPER
   // ──────────────────────────────────────────────────────
 
-  /// Solo join: builds a single-slot team and delegates to joinWithTeam().
+  /// Solo join: builds a single-slot team from user profile and delegates to joinWithTeam().
   Future<({bool success, String? error})> joinTournament(
     String tournamentId,
   ) async {
@@ -239,10 +218,10 @@ class TournamentService {
 
     final slot0 = TeamSlot(
       slotIndex:  0,
-      gameUid:    (profile['gameUid']   as String?) ?? '',
-      ign:        (profile['ign']       as String?) ?? user.displayName ?? 'Unknown',
+      gameUid:    (profile['gameUid']    as String?) ?? '',
+      ign:        (profile['ign']        as String?) ?? user.displayName ?? 'Unknown',
       userId:     user.uid,
-      readableId: profile['readableId'] as String?,
+      readableId: profile['readableId']  as String?,
     );
 
     return joinWithTeam(
@@ -252,18 +231,27 @@ class TournamentService {
     );
   }
 
-  /// PRIORITY 1 — Full atomic registration transaction.
-  ///
-  /// Steps (all-or-nothing):
-  ///   1. Validate tournament exists
-  ///   2. Validate status == 'upcoming'
-  ///   3. Validate joinedPlayers < maxPlayers
-  ///   4. Validate user NOT already registered (duplicate prevention)
-  ///   5. Validate walletBalance >= entryFee
-  ///   6. Deduct walletBalance from user document
-  ///   7. Increment joinedPlayers on tournament document
-  ///   8. Create participant sub-document
-  ///   9. Create transaction record (type: 'tournament_entry')
+  // ──────────────────────────────────────────────────────
+  // PRIORITY 0 + F1 — FULL ATOMIC REGISTRATION TRANSACTION
+  //
+  // Steps (all-or-nothing, unchanged from F1):
+  //   1. Validate tournament exists
+  //   2. Validate status == 'upcoming'
+  //   3. Validate joinedPlayers < maxPlayers
+  //   4. Validate user NOT already registered (duplicate prevention)
+  //   5. Validate walletBalance >= entryFee
+  //   6. Deduct walletBalance from user document
+  //   7. Increment joinedPlayers on tournament document
+  //   8. Create participant sub-document (now stores ALL team slots)
+  //   9. Create transaction record (type: 'tournament_entry')
+  //
+  // PRIORITY 0 changes in Step 8:
+  //   • teamSlots array now contains every slot (leader + all teammates).
+  //   • Each slot stored as: { slotIndex, gameUid, ign, userId?, readableId? }
+  //   • teamSize field added for quick admin visibility.
+  //   • All teammate IGNs stored in teamIgNs[] for Firestore query convenience.
+  // ──────────────────────────────────────────────────────
+
   Future<({bool success, String? error})> joinWithTeam({
     required String         tournamentId,
     required List<TeamSlot> slots,
@@ -273,11 +261,28 @@ class TournamentService {
     if (user == null) return (success: false, error: 'Not logged in.');
     if (slots.isEmpty) return (success: false, error: 'No team slots provided.');
 
-    // Client-side duplicate gameUid check (UX guard only — server also validates).
-    final gameUids = slots.map((s) => s.gameUid).where((u) => u.isNotEmpty).toList();
-    if (gameUids.toSet().length != gameUids.length) {
-      return (success: false, error: 'Duplicate game UIDs in your team.');
+    // ── Client-side pre-validation ─────────────────────────────────────────
+
+    // All non-leader slots must have a non-empty gameUid.
+    for (final slot in slots) {
+      if (slot.slotIndex > 0 && slot.gameUid.trim().isEmpty) {
+        return (
+          success: false,
+          error: 'Player slot ${slot.slotIndex + 1} is missing a Game UID.',
+        );
+      }
     }
+
+    // Duplicate gameUid check across all filled slots.
+    final filledUids = slots
+        .where((s) => s.gameUid.trim().isNotEmpty)
+        .map((s) => s.gameUid.trim())
+        .toList();
+    if (filledUids.toSet().length != filledUids.length) {
+      return (success: false, error: 'Duplicate Game UIDs found in your team.');
+    }
+
+    // ── Firestore references ──────────────────────────────────────────────
 
     final tRef           = _db.collection(_col).doc(tournamentId);
     final participantRef = tRef.collection('participants').doc(user.uid);
@@ -285,7 +290,8 @@ class TournamentService {
 
     try {
       await _db.runTransaction((txn) async {
-        // ── Step 1: Tournament exists ──────────────────
+
+        // ── Step 1: Tournament exists ────────────────────────────────────
         final tSnap = await txn.get(tRef);
         if (!tSnap.exists) throw Exception('Tournament not found.');
 
@@ -297,28 +303,27 @@ class TournamentService {
         final tTitle        = (tData['title']         as String?) ?? 'Tournament';
         final requiredSlots = (tData['requiredSlots'] as num?)?.toInt() ?? 1;
 
-        // ── Step 2: Status must be upcoming ───────────
+        // ── Step 2: Status must be upcoming ─────────────────────────────
         if (status != 'upcoming') {
           throw Exception('Tournament is no longer accepting registrations.');
         }
 
-        // ── Step 3: Slots available ────────────────────
+        // ── Step 3: Slots available ──────────────────────────────────────
         if (joinedPlayers >= maxPlayers) {
           throw Exception('Tournament is full.');
         }
 
-        // ── Step 4: Not already registered ────────────
-        // PRIORITY 1: Duplicate registration prevention inside transaction.
+        // ── Step 4: Not already registered ──────────────────────────────
         final participantSnap = await txn.get(participantRef);
         if (participantSnap.exists) {
           throw Exception('You are already registered for this tournament.');
         }
 
-        // ── Step 5: Wallet balance check ───────────────
+        // ── Step 5: Wallet balance check ─────────────────────────────────
         final uSnap = await txn.get(userRef);
         if (!uSnap.exists) throw Exception('User profile not found.');
 
-        final uData  = uSnap.data()!;
+        final uData   = uSnap.data()!;
         final balance = (uData['walletBalance'] as num?)?.toDouble() ?? 0.0;
 
         if (balance < entryFee) {
@@ -329,50 +334,74 @@ class TournamentService {
           );
         }
 
-        // Validate team slot count
+        // Validate minimum slot count.
         if (slots.length < requiredSlots) {
           throw Exception(
             'This tournament requires at least $requiredSlots player(s) per team.',
           );
         }
 
-        // ── Step 6: Deduct wallet balance ──────────────
+        // ── Step 6: Deduct wallet balance ────────────────────────────────
         if (entryFee > 0) {
           txn.update(userRef, {
             'walletBalance': FieldValue.increment(-entryFee),
           });
         }
 
-        // ── Step 7: Increment joinedPlayers ───────────
+        // ── Step 7: Increment joinedPlayers ──────────────────────────────
         txn.update(tRef, {'joinedPlayers': FieldValue.increment(1)});
 
-        // ── Step 8: Create participant document ────────
+        // ── Step 8: Create participant document ──────────────────────────
+        //
+        // PRIORITY 0: Store ALL slots (leader + all teammates).
+        // Each slot serialised via TeamSlot.toMap().
+        // Additional convenience fields for admin panel queries.
+
+        // Build the serialised slot list.
+        final slotsData = slots.map((s) => s.toMap()).toList();
+
+        // Build teammate IGN list (all slots including leader) for quick display.
+        final teamIgns = slots.map((s) => s.ign.trim()).toList();
+
+        // Build teammate UID list (non-empty gameUids) for admin search.
+        final teamUids = slots
+            .where((s) => s.gameUid.trim().isNotEmpty)
+            .map((s) => s.gameUid.trim())
+            .toList();
+
         txn.set(participantRef, {
+          // Leader identity (slot 0 always the joining user).
           'userId':     user.uid,
           'userName':   (profile['name']       as String?) ?? user.displayName ?? 'Unknown',
           'userEmail':  (profile['email']      as String?) ?? user.email       ?? '',
           'readableId': profile['readableId']  as String?,
           'ign':        slots.first.ign,
+
+          // PRIORITY 0: Full team slot data.
+          'teamSlots':  slotsData,
+          'teamSize':   slots.length,
+          'teamIgns':   teamIgns,
+          'teamUids':   teamUids,
+
+          // Result fields (set to defaults; updated by admin after match).
           'joinedAt':   FieldValue.serverTimestamp(),
           'status':     'registered',
           'placement':  0,
           'kills':      0,
           'winnings':   0.0,
-          'teamSlots':  slots.map((s) => s.toMap()).toList(),
         });
 
-        // ── Step 9: Create transaction record ──────────
-        // type: 'tournament_entry' as required by spec.
+        // ── Step 9: Create transaction record ────────────────────────────
         if (entryFee > 0) {
           final txnDocRef = userRef.collection('transactions').doc();
           txn.set(txnDocRef, {
-            'type':        'tournament_entry',
-            'amount':      entryFee,
-            'status':      'completed',
-            'description': 'Tournament Entry - $tTitle',
+            'type':         'tournament_entry',
+            'amount':       entryFee,
+            'status':       'completed',
+            'description':  'Tournament Entry - $tTitle',
             'tournamentId': tournamentId,
-            'createdAt':   FieldValue.serverTimestamp(),
-            'isCredit':    false,
+            'createdAt':    FieldValue.serverTimestamp(),
+            'isCredit':     false,
           });
         }
       });
@@ -389,7 +418,7 @@ class TournamentService {
   }
 
   // ──────────────────────────────────────────────────────
-  // PLAYER LOOKUP HELPERS (unchanged from v3)
+  // PLAYER LOOKUP HELPERS (unchanged from F1)
   // ──────────────────────────────────────────────────────
 
   Future<Map<String, dynamic>?> lookupPlayerByGameUid(String gameUid) async {
@@ -425,7 +454,7 @@ class TournamentService {
   }
 
   // ──────────────────────────────────────────────────────
-  // ONE-TIME READ (unchanged from v3)
+  // ONE-TIME READ (unchanged from F1)
   // ──────────────────────────────────────────────────────
 
   Future<TournamentModel?> getTournamentById(String id) async {
@@ -440,7 +469,7 @@ class TournamentService {
   }
 
   // ──────────────────────────────────────────────────────
-  // CACHE REFRESH (unchanged from v3)
+  // CACHE REFRESH (unchanged from F1)
   // ──────────────────────────────────────────────────────
 
   void invalidateTournamentCache() {

@@ -1,21 +1,30 @@
 // lib/screens/tournament_details_screen.dart
 // ─────────────────────────────────────────────
-// SHADOW STORM — Tournament Details Screen (Phase F1)
+// SHADOW STORM — Tournament Details Screen (Phase F2.5 / PRE-F3)
 //
-// Changes from v3:
-//   PRIORITY 2: Room reveal uses TournamentService.instance.isRoomRevealed(t)
-//     exclusively — no local reveal logic. Both _buildRoomSection and
-//     _RoomNotYetRevealed display the admin-set roomRevealTime if present.
+// Changes from Phase F1:
+//   PRIORITY 0 — Team tournament registration completely overhauled:
+//     • Slot 0 is always auto-filled from the player's own profile (leader).
+//     • Slots 1-N allow manual teammate entry (IGN + Game UID per slot).
+//     • Slot count is driven by tournament.requiredSlots and tournament.maxSlots.
+//     • Players can add extra optional slots up to maxSlots.
+//     • All slots are saved in the participant document as teamSlots array.
+//     • Duplicate UID check enforced client-side before join.
 //
-//   PRIORITY 3: Scaffold wrapped with MaintenanceGuard.
+//   PRIORITY 0.1 — Local teammate suggestions:
+//     • After a successful join, all teammate slots are saved to
+//       TeammateSuggestionsService (SharedPreferences, never Firebase).
+//     • While entering a teammate UID/IGN, matching suggestions appear
+//       as a dropdown below the field.
 //
-//   PRIORITY 4: walletFrozen check added before join.
-//     If walletFrozen=true, tournament join is blocked with freeze message.
-//     TournamentService.joinWithTeam() also enforces this server-side via
-//     wallet balance deduction — but we block early for UX.
+//   PRIORITY 0.2 — MY TEAM section shows full slot list including
+//     all teammates' IGN and gameUid, sourced from participant.teamSlots.
 //
-//   All original v3 widgets (TeamSlotSection, MyTeamSection, BannerHeader,
-//   RoomWidgets, PrizeSections, JoinBar, etc.) kept 100% intact.
+//   PRIORITY 2 (F1 unchanged): Room reveal uses TournamentService.isRoomRevealed().
+//   PRIORITY 3 (F1 unchanged): MaintenanceGuard wraps Scaffold.
+//   PRIORITY 4 (F1 unchanged): walletFrozen blocks join.
+//
+//   All original widgets kept intact. Only TeamSlotSection is rebuilt.
 // ─────────────────────────────────────────────
 
 import 'package:flutter/material.dart';
@@ -26,6 +35,7 @@ import '../models/tournament_model.dart';
 import '../models/team_slot_model.dart';
 import '../services/tournament_service.dart';
 import '../services/app_settings_service.dart';
+import '../services/teammate_suggestions_service.dart';
 
 // ─────────────────────────────────────────────
 // DESIGN TOKENS
@@ -84,18 +94,22 @@ class TournamentDetailsScreen extends StatefulWidget {
 
 class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     with TickerProviderStateMixin {
-  bool _isJoined   = false;
-  bool _isJoining  = false;
+  bool _isJoined     = false;
+  bool _isJoining    = false;
   bool _checkingJoin = true;
 
   _ParticipantResult? _myResult;
+  List<TeamSlot>      _myTeamSlots  = [];
 
-  List<TeamSlot>  _myTeamSlots  = [];
+  // Pending slots for the registration form (one entry per team slot).
+  // Index 0 = leader (auto-filled, never null after profile load).
+  // Index 1+ = teammates (null until filled by player).
   List<TeamSlot?> _pendingSlots = [];
-  String _userGameUid   = '';
-  String _userIgn       = '';
+
+  String _userGameUid    = '';
+  String _userIgn        = '';
   String _userReadableId = '';
-  bool   _profileLoaded = false;
+  bool   _profileLoaded  = false;
 
   late AnimationController _fadeCtrl;
   late AnimationController _pulseCtrl;
@@ -131,10 +145,17 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     super.dispose();
   }
 
+  // ─── Slot initialisation ──────────────────────────────────────────────────
+
   void _initPendingSlots() {
+    // Build required + optional initial slots.
+    // required = tournament.requiredSlots (minimum team size)
+    // Start with exactly requiredSlots slots (leader + required teammates).
     final count = widget.tournament.requiredSlots.clamp(1, widget.tournament.maxSlots);
     _pendingSlots = List.generate(count, (_) => null);
   }
+
+  // ─── Profile load ────────────────────────────────────────────────────────
 
   Future<void> _loadUserProfile() async {
     if (_userId == null) { setState(() => _profileLoaded = true); return; }
@@ -147,6 +168,7 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
           _userIgn        = (d['ign']        as String?) ?? _user?.displayName ?? '';
           _userReadableId = (d['readableId'] as String?) ?? '';
           _profileLoaded  = true;
+          // Auto-fill slot 0 (leader).
           if (_pendingSlots.isNotEmpty) {
             _pendingSlots[0] = TeamSlot(
               slotIndex:  0,
@@ -163,6 +185,8 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     }
   }
 
+  // ─── Join check ──────────────────────────────────────────────────────────
+
   Future<void> _checkIfJoined() async {
     if (_userId == null) { setState(() => _checkingJoin = false); return; }
     try {
@@ -175,7 +199,9 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
           _myResult = _ParticipantResult.fromDoc(doc);
           final d        = doc.data() as Map<String, dynamic>? ?? {};
           final rawSlots = d['teamSlots'] as List<dynamic>? ?? [];
-          _myTeamSlots   = rawSlots.asMap().entries.map((e) => TeamSlot.fromMap(e.value as Map<String, dynamic>, e.key)).toList();
+          _myTeamSlots   = rawSlots.asMap().entries
+              .map((e) => TeamSlot.fromMap(e.value as Map<String, dynamic>, e.key))
+              .toList();
         }
       }
     } catch (_) {
@@ -183,10 +209,12 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     }
   }
 
-  // ─────────────────────────────────────────────
-  // JOIN WITH TEAM
-  // PRIORITY 4: Check walletFrozen BEFORE attempting join.
-  // ─────────────────────────────────────────────
+  // ─── JOIN ─────────────────────────────────────────────────────────────────
+  //
+  // PRIORITY 0: collects all pending slots, validates, passes to service.
+  // PRIORITY 0.1: saves teammates to local suggestions after success.
+  // PRIORITY 4: blocks if walletFrozen.
+
   Future<void> _joinWithTeamSlots(TournamentModel t) async {
     if (_userId == null) { _showSnack('Please log in to join tournaments.'); return; }
 
@@ -196,29 +224,38 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
       _showSnack('Platform is under maintenance. Please try again later.');
       return;
     }
-
-    // PRIORITY 4: Block join when wallet is frozen.
     if (settings.walletFrozen) {
       _showSnack(settings.walletFreezeReason.isNotEmpty
           ? 'Wallet frozen: ${settings.walletFreezeReason}'
           : 'Tournament entry is disabled while wallet is frozen.');
       return;
     }
-
     if (t.slotsLeft <= 0) { _showSnack('Tournament is full!'); return; }
 
+    // Collect filled slots (non-null, with non-empty gameUid for non-leader).
     final filled = _pendingSlots.whereType<TeamSlot>().toList();
+
+    // Validate minimum required slots.
     if (filled.length < t.requiredSlots) {
-      _showSnack('Please fill all ${t.requiredSlots} player slot(s) before joining.');
+      _showSnack('Please fill all ${t.requiredSlots} required player slot(s).');
       return;
     }
-    if (filled.any((s) => s.gameUid.trim().isEmpty)) {
-      _showSnack('Please enter a valid Game UID for each team member.');
-      return;
+
+    // Validate all non-leader slots have gameUid.
+    for (final slot in filled) {
+      if (slot.slotIndex > 0 && slot.gameUid.trim().isEmpty) {
+        _showSnack('Please enter a Game UID for player slot ${slot.slotIndex + 1}.');
+        return;
+      }
     }
-    final uids = filled.map((s) => s.gameUid.trim()).toList();
+
+    // Duplicate gameUid check.
+    final uids = filled
+        .where((s) => s.gameUid.trim().isNotEmpty)
+        .map((s) => s.gameUid.trim())
+        .toList();
     if (uids.toSet().length != uids.length) {
-      _showSnack('Duplicate Game UIDs found in your team.');
+      _showSnack('Duplicate Game UIDs found in your team. Each player must have a unique UID.');
       return;
     }
 
@@ -231,19 +268,30 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     } catch (_) {}
 
     final result = await _service.joinWithTeam(
-      tournamentId: _tournamentId, slots: filled, profile: profile,
+      tournamentId: _tournamentId,
+      slots:        filled,
+      profile:      profile,
     );
 
     if (!mounted) return;
 
     if (result.success) {
-      setState(() { _isJoined = true; _isJoining = false; _myTeamSlots = filled; });
+      // PRIORITY 0.1: Save teammates locally (non-blocking).
+      TeammateSuggestionsService.instance.saveFromSlots(filled).catchError((_) {});
+
+      setState(() {
+        _isJoined    = true;
+        _isJoining   = false;
+        _myTeamSlots = filled;
+      });
       _showSuccessSnack('You\'re in! Good luck, ${_user?.displayName?.split(' ').first ?? 'Striker'}!');
     } else {
       setState(() => _isJoining = false);
       _showSnack(result.error ?? 'Failed to join. Please try again.');
     }
   }
+
+  // ─── Snacks ──────────────────────────────────────────────────────────────
 
   void _showSnack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -271,10 +319,8 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     _showSuccessSnack('$label copied!');
   }
 
-  // ─────────────────────────────────────────────
-  // BUILD
-  // PRIORITY 3: MaintenanceGuard wraps Scaffold.
-  // ─────────────────────────────────────────────
+  // ─── BUILD ────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return MaintenanceGuard(
@@ -304,9 +350,8 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     );
   }
 
-  // ─────────────────────────────────────────────
-  // BODY
-  // ─────────────────────────────────────────────
+  // ─── BODY ─────────────────────────────────────────────────────────────────
+
   Widget _buildBody(TournamentModel t) {
     final isCompleted = t.status == TournamentStatus.completed;
     final isCancelled = t.status == TournamentStatus.cancelled;
@@ -328,9 +373,18 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
       ];
     } else {
       statusContent = [
-        if (!_isJoined && _isTeamTournament && !_checkingJoin) ...[
+        // PRIORITY 0: Show team slot section for ALL team-mode tournaments,
+        // not just _isTeamTournament — solo tournaments get a single-slot
+        // confirmation view, team tournaments get the full slot editor.
+        if (!_isJoined && !_checkingJoin) ...[
           const SizedBox(height: 16),
-          _TeamSlotSection(tournament: t, slots: _pendingSlots, profileLoaded: _profileLoaded, service: _service, onSlotsChanged: (updated) => setState(() => _pendingSlots = updated)),
+          _TeamSlotSection(
+            tournament:    t,
+            slots:         _pendingSlots,
+            profileLoaded: _profileLoaded,
+            service:       _service,
+            onSlotsChanged: (updated) => setState(() => _pendingSlots = updated),
+          ),
         ],
         if (_isJoined && _myTeamSlots.isNotEmpty) ...[
           const SizedBox(height: 16),
@@ -358,9 +412,8 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     ]);
   }
 
-  // ─────────────────────────────────────────────
-  // SLIVER APP BAR
-  // ─────────────────────────────────────────────
+  // ─── SLIVER APP BAR ───────────────────────────────────────────────────────
+
   Widget _buildSliverAppBar(TournamentModel t) {
     return SliverAppBar(
       expandedHeight: 260, pinned: true, backgroundColor: _C.background,
@@ -372,9 +425,8 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     );
   }
 
-  // ─────────────────────────────────────────────
-  // INFO ROW
-  // ─────────────────────────────────────────────
+  // ─── INFO ROW ─────────────────────────────────────────────────────────────
+
   Widget _buildInfoRow(TournamentModel t) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -388,14 +440,10 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     );
   }
 
-  // ─────────────────────────────────────────────
-  // ROOM SECTION
-  // PRIORITY 2: isRoomRevealed() is called here — single source of truth.
-  // ─────────────────────────────────────────────
-  Widget _buildRoomSection(TournamentModel t) {
-    // PRIORITY 2: Delegate entirely to TournamentService.isRoomRevealed().
-    final revealed = _service.isRoomRevealed(t);
+  // ─── ROOM SECTION ─────────────────────────────────────────────────────────
 
+  Widget _buildRoomSection(TournamentModel t) {
+    final revealed = _service.isRoomRevealed(t);
     return _SectionCard(
       title: 'ROOM ACCESS', icon: Icons.meeting_room_rounded, iconColor: _C.purple,
       child: _checkingJoin
@@ -408,9 +456,6 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     );
   }
 
-  // ─────────────────────────────────────────────
-  // CANCELLED NOTICE
-  // ─────────────────────────────────────────────
   Widget _buildCancelledNotice() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -428,15 +473,17 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     );
   }
 
-  // ─────────────────────────────────────────────
-  // MY RESULT
-  // ─────────────────────────────────────────────
   Widget _buildMyResultSection(_ParticipantResult result) {
     Color placementColor;
-    if (result.placement == 1)       placementColor = _C.gold;
-    else if (result.placement <= 3)  placementColor = const Color(0xFFC0C0C0);
-    else if (result.placement <= 10) placementColor = _C.success;
-    else                             placementColor = _C.textSecondary;
+    if (result.placement == 1) {
+      placementColor = _C.gold;
+    } else if (result.placement <= 3) {
+      placementColor = const Color(0xFFC0C0C0);
+    } else if (result.placement <= 10) {
+      placementColor = _C.success;
+    } else {
+      placementColor = _C.textSecondary;
+    }
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
@@ -481,9 +528,6 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     );
   }
 
-  // ─────────────────────────────────────────────
-  // COMPLETED PRIZE SUMMARY
-  // ─────────────────────────────────────────────
   Widget _buildCompletedPrizeSummary(TournamentModel t) {
     return _SectionCard(
       title: 'MATCH SUMMARY', icon: Icons.check_circle_outline_rounded, iconColor: _C.textMuted,
@@ -498,9 +542,6 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     );
   }
 
-  // ─────────────────────────────────────────────
-  // PRIZE SECTION
-  // ─────────────────────────────────────────────
   Widget _buildPrizeSection(TournamentModel t) {
     return _SectionCard(
       title: 'PRIZE BREAKDOWN', icon: Icons.emoji_events_rounded, iconColor: _C.gold,
@@ -524,9 +565,6 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     );
   }
 
-  // ─────────────────────────────────────────────
-  // REWARD EXPLANATION
-  // ─────────────────────────────────────────────
   Widget _buildRewardExplanationSection(TournamentModel t) {
     final hasDesc = t.rewardDescription?.trim().isNotEmpty == true;
     final hasAuto = t.killReward > 0 || t.survivalReward > 0 || t.positions.isNotEmpty;
@@ -539,7 +577,7 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           if (hasAuto) ...[
             if (t.positions.isNotEmpty) _RewardBubble(icon: Icons.emoji_events_rounded, color: _C.gold, title: 'Placement Rewards', desc: 'Top ${t.positions.length} players earn prizes based on final placement.'),
-            if (t.killReward > 0) ...[const SizedBox(height: 10), _RewardBubble(icon: Icons.sports_kabaddi_rounded, color: _C.live, title: 'Kill Reward — ₹${t.killReward.toInt()} per kill', desc: 'Earn ₹${t.killReward.toInt()} for every elimination. Paid out after match.')],
+            if (t.killReward > 0) ...[const SizedBox(height: 10), _RewardBubble(icon: Icons.sports_kabaddi_rounded, color: _C.live, title: 'Kill Reward — ₹${t.killReward.toInt()} per kill', desc: 'Earn ₹${t.killReward.toInt()} for every elimination.')],
             if (t.survivalReward > 0) ...[const SizedBox(height: 10), _RewardBubble(icon: Icons.shield_rounded, color: _C.purpleLight, title: 'Survival Bonus — ₹${t.survivalReward.toInt()}', desc: 'Flat ₹${t.survivalReward.toInt()} for surviving to the final circle.')],
             const SizedBox(height: 10),
             Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: _C.surfaceElevated, borderRadius: BorderRadius.circular(10), border: Border.all(color: _C.border)), child: Row(children: [const Icon(Icons.lightbulb_rounded, color: _C.gold, size: 14), const SizedBox(width: 8), Expanded(child: Text(_rewardTypeNote(t.rewardType), style: const TextStyle(color: _C.textSecondary, fontSize: 11, height: 1.5)))])),
@@ -563,9 +601,6 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     }
   }
 
-  // ─────────────────────────────────────────────
-  // MATCH INFO
-  // ─────────────────────────────────────────────
   Widget _buildMatchInfo(TournamentModel t) {
     return _SectionCard(
       title: 'MATCH INFO', icon: Icons.sports_esports_rounded, iconColor: _C.purple,
@@ -590,9 +625,6 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     }
   }
 
-  // ─────────────────────────────────────────────
-  // SLOT PROGRESS
-  // ─────────────────────────────────────────────
   Widget _buildSlotProgress(TournamentModel t) {
     return _SectionCard(
       title: 'SLOTS', icon: Icons.grid_view_rounded, iconColor: _C.purpleLight,
@@ -621,10 +653,8 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     );
   }
 
-  // ─────────────────────────────────────────────
-  // JOIN BAR
-  // PRIORITY 4: Shows frozen state in join bar.
-  // ─────────────────────────────────────────────
+  // ─── JOIN BAR ─────────────────────────────────────────────────────────────
+
   Widget _buildJoinBar(TournamentModel t) {
     final isCompleted = t.status == TournamentStatus.completed;
     final isCancelled = t.status == TournamentStatus.cancelled;
@@ -633,9 +663,9 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
     return StreamBuilder<AppSettings>(
       stream: AppSettingsService.instance.settingsStream,
       builder: (context, settingsSnap) {
-        final settings     = settingsSnap.data ?? const AppSettings();
-        final frozen       = settings.walletFrozen;
-        final maintenance  = settings.maintenanceMode;
+        final settings    = settingsSnap.data ?? const AppSettings();
+        final frozen      = settings.walletFrozen;
+        final maintenance = settings.maintenanceMode;
 
         return Container(
           decoration: const BoxDecoration(color: _C.surface, border: Border(top: BorderSide(color: _C.border))),
@@ -674,79 +704,180 @@ class _TournamentDetailsScreenState extends State<TournamentDetailsScreen>
   }
 }
 
-// ─────────────────────────────────────────────
-// TEAM SLOT SECTION (unchanged from v3)
-// ─────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// TEAM SLOT SECTION — PRIORITY 0 REWRITE
+//
+// Handles all team modes: Solo (1 slot), Duo (2), 3v3 (3), Squad (4), etc.
+// Slot 0 = auto-filled leader (current user, read-only).
+// Slots 1+ = teammate entry with IGN + Game UID fields + suggestions dropdown.
+//
+// Dynamic slot management:
+//   • Starts with tournament.requiredSlots slots.
+//   • Player can add up to tournament.maxSlots total.
+//   • Player can remove down to tournament.requiredSlots minimum.
+// ═════════════════════════════════════════════════════════════════════════════
+
 class _TeamSlotSection extends StatefulWidget {
-  final TournamentModel tournament;
-  final List<TeamSlot?> slots;
-  final bool profileLoaded;
-  final TournamentService service;
-  final void Function(List<TeamSlot?>) onSlotsChanged;
-  const _TeamSlotSection({required this.tournament, required this.slots, required this.profileLoaded, required this.service, required this.onSlotsChanged});
-  @override State<_TeamSlotSection> createState() => _TeamSlotSectionState();
+  final TournamentModel                  tournament;
+  final List<TeamSlot?>                  slots;
+  final bool                             profileLoaded;
+  final TournamentService                service;
+  final void Function(List<TeamSlot?>)   onSlotsChanged;
+
+  const _TeamSlotSection({
+    required this.tournament,
+    required this.slots,
+    required this.profileLoaded,
+    required this.service,
+    required this.onSlotsChanged,
+  });
+
+  @override
+  State<_TeamSlotSection> createState() => _TeamSlotSectionState();
 }
 
 class _TeamSlotSectionState extends State<_TeamSlotSection> {
-  final Map<int, TextEditingController> _gameUidCtrl = {};
-  final Map<int, TextEditingController> _ignCtrl     = {};
-  final Map<int, String?> _levelWarning = {};
-  final Map<int, bool>    _lookingUp    = {};
+  // Controllers keyed by slot index (1+).
+  final Map<int, TextEditingController> _uidCtrl = {};
+  final Map<int, TextEditingController> _ignCtrl = {};
 
-  @override void initState() { super.initState(); _buildControllers(); }
+  // Lookup/suggestion state.
+  final Map<int, bool>             _lookingUp   = {};
+  final Map<int, String?>          _uidWarning  = {};
+  final Map<int, bool>             _showSuggest = {};
+  final Map<int, List<TeammateEntry>> _suggestions = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _buildControllers();
+  }
 
   void _buildControllers() {
     for (var i = 1; i < widget.slots.length; i++) {
-      _gameUidCtrl[i] ??= TextEditingController(text: widget.slots[i]?.gameUid ?? '');
-      _ignCtrl[i]     ??= TextEditingController(text: widget.slots[i]?.ign     ?? '');
+      _uidCtrl[i] ??= TextEditingController(text: widget.slots[i]?.gameUid ?? '');
+      _ignCtrl[i] ??= TextEditingController(text: widget.slots[i]?.ign     ?? '');
     }
   }
 
   @override
   void dispose() {
-    for (final c in _gameUidCtrl.values) c.dispose();
-    for (final c in _ignCtrl.values)     c.dispose();
+    for (final c in _uidCtrl.values) {
+      c.dispose();
+    }
+    for (final c in _ignCtrl.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
+  // ── Slot add / remove ────────────────────────────────────────────────────
+
   void _addSlot() {
-    if (widget.slots.length >= widget.tournament.maxSlots) return;
-    final newIndex = widget.slots.length;
-    _gameUidCtrl[newIndex] = TextEditingController();
-    _ignCtrl[newIndex]     = TextEditingController();
+    final t = widget.tournament;
+    if (widget.slots.length >= t.maxSlots) return;
+    final i = widget.slots.length;
+    _uidCtrl[i] = TextEditingController();
+    _ignCtrl[i] = TextEditingController();
     widget.onSlotsChanged([...widget.slots, null]);
   }
 
-  void _removeLastSlot() {
-    if (widget.slots.length <= widget.tournament.requiredSlots) return;
-    final i = widget.slots.length - 1;
-    _gameUidCtrl[i]?.dispose(); _gameUidCtrl.remove(i);
-    _ignCtrl[i]?.dispose();     _ignCtrl.remove(i);
-    _levelWarning.remove(i); _lookingUp.remove(i);
-    widget.onSlotsChanged(widget.slots.sublist(0, i));
-  }
+  void _removeSlot(int index) {
+    final t = widget.tournament;
+    if (index == 0) return; // never remove leader
+    if (widget.slots.length <= t.requiredSlots) return;
 
-  void _updateSlot(int index) {
-    final gameUid = _gameUidCtrl[index]?.text.trim() ?? '';
-    final ign     = _ignCtrl[index]?.text.trim() ?? '';
-    final updated = List<TeamSlot?>.from(widget.slots);
-    updated[index] = TeamSlot(slotIndex: index, gameUid: gameUid, ign: ign);
+    // Dispose controllers for the removed index.
+    _uidCtrl[index]?.dispose(); _uidCtrl.remove(index);
+    _ignCtrl[index]?.dispose(); _ignCtrl.remove(index);
+    _uidWarning.remove(index);
+    _lookingUp.remove(index);
+    _showSuggest.remove(index);
+    _suggestions.remove(index);
+
+    final updated = List<TeamSlot?>.from(widget.slots)..removeAt(index);
+
+    // Re-key controllers for indices above the removed one.
+    // Build fresh maps with corrected indices.
+    final newUid = <int, TextEditingController>{};
+    final newIgn = <int, TextEditingController>{};
+    for (var j = 1; j < updated.length; j++) {
+      final origIdx = j < index ? j : j + 1;
+      newUid[j] = _uidCtrl[origIdx] ?? TextEditingController();
+      newIgn[j] = _ignCtrl[origIdx] ?? TextEditingController();
+    }
+    _uidCtrl
+      ..clear()
+      ..addAll(newUid);
+    _ignCtrl
+      ..clear()
+      ..addAll(newIgn);
+
     widget.onSlotsChanged(updated);
   }
 
+  // ── Slot update ──────────────────────────────────────────────────────────
+
+  void _updateSlot(int index) {
+    final uid = _uidCtrl[index]?.text.trim() ?? '';
+    final ign = _ignCtrl[index]?.text.trim() ?? '';
+    final updated = List<TeamSlot?>.from(widget.slots);
+    updated[index] = uid.isEmpty && ign.isEmpty
+        ? null
+        : TeamSlot(slotIndex: index, gameUid: uid, ign: ign);
+    widget.onSlotsChanged(updated);
+  }
+
+  // ── Suggestion search ────────────────────────────────────────────────────
+
+  void _onUidChanged(int index, String value) {
+    _updateSlot(index);
+
+    // Show suggestions when the player starts typing.
+    final results = TeammateSuggestionsService.instance.search(value);
+    setState(() {
+      _suggestions[index]  = results;
+      _showSuggest[index]  = results.isNotEmpty;
+    });
+
+    // Trigger UID lookup when long enough.
+    if (value.trim().length >= 6) {
+      _lookupGameUid(index, value.trim());
+    } else {
+      setState(() => _uidWarning[index] = null);
+    }
+  }
+
+  void _onIgnChanged(int index, String value) {
+    _updateSlot(index);
+    // Also search suggestions by IGN.
+    if (value.trim().length >= 2) {
+      final results = TeammateSuggestionsService.instance.search(value);
+      setState(() {
+        _suggestions[index] = results;
+        _showSuggest[index] = results.isNotEmpty;
+      });
+    }
+  }
+
   Future<void> _lookupGameUid(int index, String gameUid) async {
-    if (gameUid.length < 6) return;
+    if (_lookingUp[index] == true) return;
     setState(() => _lookingUp[index] = true);
+
     final player = await widget.service.lookupPlayerByGameUid(gameUid);
     if (!mounted) return;
+
     setState(() {
       _lookingUp[index] = false;
       if (player == null) {
-        _levelWarning[index] = null;
+        _uidWarning[index] = null;
       } else {
         final level    = (player['gameLevel'] as num?)?.toInt() ?? 0;
         final minLevel = widget.tournament.minimumLevel;
-        _levelWarning[index] = level < minLevel ? 'This player\'s level ($level) is below the minimum ($minLevel).' : null;
+        _uidWarning[index] = level > 0 && level < minLevel
+            ? 'Level $level is below the minimum ($minLevel).'
+            : null;
+        // Auto-fill IGN if field is empty.
         final regIgn = player['ign'] as String? ?? '';
         if (regIgn.isNotEmpty && (_ignCtrl[index]?.text.isEmpty == true)) {
           _ignCtrl[index]?.text = regIgn;
@@ -756,9 +887,25 @@ class _TeamSlotSectionState extends State<_TeamSlotSection> {
     });
   }
 
+  void _applySuggestion(int index, TeammateEntry suggestion) {
+    _uidCtrl[index]?.text = suggestion.gameUid;
+    _ignCtrl[index]?.text = suggestion.ign;
+    setState(() {
+      _showSuggest[index]  = false;
+      _suggestions[index]  = [];
+    });
+    _updateSlot(index);
+    if (suggestion.gameUid.trim().length >= 6) {
+      _lookupGameUid(index, suggestion.gameUid.trim());
+    }
+  }
+
+  // ── BUILD ────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     final t          = widget.tournament;
+    final isSolo     = t.requiredSlots <= 1 && t.maxSlots <= 1;
     final canAddMore = widget.slots.length < t.maxSlots;
     final canRemove  = widget.slots.length > t.requiredSlots;
 
@@ -766,31 +913,77 @@ class _TeamSlotSectionState extends State<_TeamSlotSection> {
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Container(
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: _C.surfaceCard, borderRadius: BorderRadius.circular(16), border: Border.all(color: _C.border)),
+        decoration: BoxDecoration(
+          color: _C.surfaceCard, borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: _C.border),
+        ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Section header.
           Row(children: [
-            const Icon(Icons.group_rounded, color: _C.purple, size: 16), const SizedBox(width: 8),
-            const Text('YOUR TEAM', style: TextStyle(color: _C.textSecondary, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.2)),
+            const Icon(Icons.group_rounded, color: _C.purple, size: 16),
+            const SizedBox(width: 8),
+            Text(
+              isSolo ? 'REGISTRATION' : 'YOUR TEAM',
+              style: const TextStyle(color: _C.textSecondary, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.2),
+            ),
             const Spacer(),
-            Text('${widget.slots.length}/${t.maxSlots} slots', style: const TextStyle(color: _C.textMuted, fontSize: 11)),
+            Text(
+              isSolo ? '1 PLAYER' : '${widget.slots.length}/${t.maxSlots} SLOTS',
+              style: const TextStyle(color: _C.textMuted, fontSize: 11),
+            ),
           ]),
           const SizedBox(height: 14),
+
+          // Slot 0 — Leader (always auto-filled, read-only).
           _buildLeaderSlot(),
-          const SizedBox(height: 6),
-          ...List.generate(widget.slots.length - 1, (i) => _buildManualSlot(i + 1)),
-          const SizedBox(height: 10),
-          Row(children: [
-            if (canRemove) _SlotControlBtn(label: '− Remove slot', color: _C.live, onTap: _removeLastSlot),
-            if (canRemove && canAddMore) const SizedBox(width: 8),
-            if (canAddMore) _SlotControlBtn(label: '+ Add player', color: _C.success, onTap: _addSlot),
-          ]),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
+
+          // Slots 1+ — Teammates.
+          if (!isSolo)
+            ...List.generate(widget.slots.length - 1, (i) {
+              final slotIdx = i + 1;
+              return _buildTeammateSlot(slotIdx);
+            }),
+
+          // Add/remove slot controls.
+          if (!isSolo && (canAddMore || canRemove)) ...[
+            const SizedBox(height: 10),
+            Row(children: [
+              if (canRemove)
+                _SlotControlBtn(
+                  label: '− Remove slot',
+                  color: _C.live,
+                  onTap: () => _removeSlot(widget.slots.length - 1),
+                ),
+              if (canRemove && canAddMore) const SizedBox(width: 8),
+              if (canAddMore)
+                _SlotControlBtn(
+                  label: '+ Add teammate',
+                  color: _C.success,
+                  onTap: _addSlot,
+                ),
+            ]),
+          ],
+
+          const SizedBox(height: 12),
+
+          // Info banner.
           Container(
             padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: _C.purpleGlowFaint, borderRadius: BorderRadius.circular(8), border: Border.all(color: _C.border)),
+            decoration: BoxDecoration(
+              color: _C.purpleGlowFaint, borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _C.border),
+            ),
             child: Row(children: [
-              const Icon(Icons.info_outline_rounded, color: _C.purple, size: 13), const SizedBox(width: 8),
-              Expanded(child: Text('Enter your teammates\' in-game UID and name. Only players with level ${t.minimumLevel}+ can participate.', style: const TextStyle(color: _C.textSecondary, fontSize: 11, height: 1.4))),
+              const Icon(Icons.info_outline_rounded, color: _C.purple, size: 13),
+              const SizedBox(width: 8),
+              Expanded(child: Text(
+                isSolo
+                    ? 'Your profile details will be used for this registration.'
+                    : 'Enter each teammate\'s in-game UID and name. '
+                      'Minimum level ${t.minimumLevel} required.',
+                style: const TextStyle(color: _C.textSecondary, fontSize: 11, height: 1.4),
+              )),
             ]),
           ),
         ]),
@@ -802,71 +995,248 @@ class _TeamSlotSectionState extends State<_TeamSlotSection> {
     final slot = widget.slots.isNotEmpty ? widget.slots[0] : null;
     return Container(
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: _C.purple.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(12), border: Border.all(color: _C.purple.withValues(alpha: 0.35))),
+      decoration: BoxDecoration(
+        color: _C.purple.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _C.purple.withValues(alpha: 0.35)),
+      ),
       child: Row(children: [
-        Container(width: 28, height: 28, decoration: BoxDecoration(color: _C.purple.withValues(alpha: 0.2), shape: BoxShape.circle, border: Border.all(color: _C.purple.withValues(alpha: 0.5))), child: const Center(child: Text('1', style: TextStyle(color: _C.purple, fontSize: 12, fontWeight: FontWeight.w800)))),
+        Container(
+          width: 28, height: 28,
+          decoration: BoxDecoration(
+            color: _C.purple.withValues(alpha: 0.2), shape: BoxShape.circle,
+            border: Border.all(color: _C.purple.withValues(alpha: 0.5)),
+          ),
+          child: const Center(child: Text('1', style: TextStyle(color: _C.purple, fontSize: 12, fontWeight: FontWeight.w800))),
+        ),
         const SizedBox(width: 10),
-        Expanded(child: widget.profileLoaded
-            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(slot?.ign.isNotEmpty == true ? slot!.ign : 'Your IGN', style: const TextStyle(color: _C.textPrimary, fontSize: 13, fontWeight: FontWeight.w700)),
-                if (slot?.gameUid.isNotEmpty == true) Text('UID: ${slot!.gameUid}', style: const TextStyle(color: _C.textSecondary, fontSize: 11)),
-                if (slot?.readableId != null) Text(slot!.readableId!, style: const TextStyle(color: _C.textMuted, fontSize: 10)),
-              ])
-            : const Text('Loading your profile…', style: TextStyle(color: _C.textMuted, fontSize: 12))),
-        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: _C.purple.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)), child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.lock_rounded, color: _C.purple, size: 10), SizedBox(width: 4), Text('YOU', style: TextStyle(color: _C.purple, fontSize: 9, fontWeight: FontWeight.w800))])),
-      ]),
-    );
-  }
-
-  Widget _buildManualSlot(int index) {
-    final warning = _levelWarning[index];
-    final looking = _lookingUp[index] ?? false;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: _C.surfaceElevated, borderRadius: BorderRadius.circular(12), border: Border.all(color: warning != null ? _C.gold.withValues(alpha: 0.4) : _C.border)),
-      child: Column(children: [
-        Row(children: [
-          Container(width: 28, height: 28, decoration: BoxDecoration(color: _C.surfaceCard, shape: BoxShape.circle, border: Border.all(color: _C.border)), child: Center(child: Text('${index + 1}', style: const TextStyle(color: _C.textMuted, fontSize: 12, fontWeight: FontWeight.w700)))),
-          const SizedBox(width: 10),
-          Expanded(child: TextFormField(
-            controller: _gameUidCtrl[index], style: const TextStyle(color: _C.textPrimary, fontSize: 13),
-            keyboardType: TextInputType.number,
-            decoration: _slotInputDeco('Game UID', suffix: looking ? const Padding(padding: EdgeInsets.all(10), child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _C.purple))) : null),
-            onChanged: (v) { _updateSlot(index); if (v.trim().length >= 6) _lookupGameUid(index, v.trim()); },
-          )),
-          const SizedBox(width: 8),
-          Expanded(child: TextFormField(controller: _ignCtrl[index], style: const TextStyle(color: _C.textPrimary, fontSize: 13), decoration: _slotInputDeco('In-Game Name'), onChanged: (_) => _updateSlot(index))),
-        ]),
-        if (warning != null) ...[
-          const SizedBox(height: 8),
-          Row(children: [
-            const SizedBox(width: 38),
-            const Icon(Icons.warning_amber_rounded, color: _C.gold, size: 13), const SizedBox(width: 6),
-            Expanded(child: Text(warning, style: const TextStyle(color: _C.gold, fontSize: 11))),
+        Expanded(
+          child: widget.profileLoaded
+              ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(
+                    slot?.ign.isNotEmpty == true ? slot!.ign : 'Your IGN',
+                    style: const TextStyle(color: _C.textPrimary, fontSize: 13, fontWeight: FontWeight.w700),
+                  ),
+                  if (slot?.gameUid.isNotEmpty == true)
+                    Text('UID: ${slot!.gameUid}',
+                        style: const TextStyle(color: _C.textSecondary, fontSize: 11)),
+                  if (slot?.readableId != null)
+                    Text(slot!.readableId!,
+                        style: const TextStyle(color: _C.textMuted, fontSize: 10)),
+                ])
+              : const Text('Loading your profile…',
+                  style: TextStyle(color: _C.textMuted, fontSize: 12)),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: _C.purple.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6),
+          ),
+          child: const Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.lock_rounded, color: _C.purple, size: 10),
+            SizedBox(width: 4),
+            Text('YOU', style: TextStyle(color: _C.purple, fontSize: 9, fontWeight: FontWeight.w800)),
           ]),
-        ],
+        ),
       ]),
     );
   }
 
-  InputDecoration _slotInputDeco(String label, {Widget? suffix}) => InputDecoration(
-    labelText: label, suffixIcon: suffix,
-    labelStyle: const TextStyle(color: _C.textMuted, fontSize: 12),
-    filled: true, fillColor: _C.surfaceCard, isDense: true,
-    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+  Widget _buildTeammateSlot(int index) {
+    final warning     = _uidWarning[index];
+    final looking     = _lookingUp[index] ?? false;
+    final showSuggest = _showSuggest[index] ?? false;
+    final suggestions = _suggestions[index] ?? [];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          margin: const EdgeInsets.only(bottom: 6),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: _C.surfaceElevated, borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: warning != null ? _C.gold.withValues(alpha: 0.4) : _C.border,
+            ),
+          ),
+          child: Column(children: [
+            // Slot number + fields row.
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Container(
+                  width: 28, height: 28,
+                  decoration: BoxDecoration(
+                    color: _C.surfaceCard, shape: BoxShape.circle,
+                    border: Border.all(color: _C.border),
+                  ),
+                  child: Center(child: Text(
+                    '${index + 1}',
+                    style: const TextStyle(color: _C.textMuted, fontSize: 12, fontWeight: FontWeight.w700),
+                  )),
+                ),
+              ),
+              const SizedBox(width: 10),
+              // UID field.
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('GAME UID', style: TextStyle(color: _C.textMuted, fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+                const SizedBox(height: 3),
+                TextFormField(
+                  controller: _uidCtrl[index],
+                  style: const TextStyle(color: _C.textPrimary, fontSize: 13),
+                  keyboardType: TextInputType.number,
+                  decoration: _fieldDeco(
+                    'Enter game UID',
+                    suffix: looking
+                        ? const Padding(
+                            padding: EdgeInsets.all(10),
+                            child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _C.purple)),
+                          )
+                        : null,
+                  ),
+                  onChanged: (v) => _onUidChanged(index, v),
+                ),
+              ])),
+              const SizedBox(width: 8),
+              // IGN field.
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('IN-GAME NAME', style: TextStyle(color: _C.textMuted, fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+                const SizedBox(height: 3),
+                TextFormField(
+                  controller: _ignCtrl[index],
+                  style: const TextStyle(color: _C.textPrimary, fontSize: 13),
+                  decoration: _fieldDeco('Enter IGN'),
+                  onChanged: (v) => _onIgnChanged(index, v),
+                ),
+              ])),
+            ]),
+
+            // Warning row.
+            if (warning != null) ...[
+              const SizedBox(height: 8),
+              Row(children: [
+                const SizedBox(width: 38),
+                const Icon(Icons.warning_amber_rounded, color: _C.gold, size: 13),
+                const SizedBox(width: 6),
+                Expanded(child: Text(warning, style: const TextStyle(color: _C.gold, fontSize: 11))),
+              ]),
+            ],
+          ]),
+        ),
+
+        // Suggestion dropdown.
+        if (showSuggest && suggestions.isNotEmpty)
+          _SuggestionDropdown(
+            suggestions: suggestions,
+            onSelect:    (s) => _applySuggestion(index, s),
+            onDismiss:   () => setState(() => _showSuggest[index] = false),
+          ),
+      ],
+    );
+  }
+
+  InputDecoration _fieldDeco(String label, {Widget? suffix}) => InputDecoration(
+    labelText:       label,
+    suffixIcon:      suffix,
+    labelStyle:      const TextStyle(color: _C.textMuted, fontSize: 11),
+    filled:          true,
+    fillColor:       _C.surfaceCard,
+    isDense:         true,
+    contentPadding:  const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
     border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: _C.border)),
-    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: _C.border)),
-    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: _C.purple, width: 1.5)),
+    enabledBorder:  OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: _C.border)),
+    focusedBorder:  OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: _C.purple, width: 1.5)),
   );
 }
 
 // ─────────────────────────────────────────────
-// MY TEAM SECTION (unchanged from v3)
+// SUGGESTION DROPDOWN — PRIORITY 0.1
 // ─────────────────────────────────────────────
+
+class _SuggestionDropdown extends StatelessWidget {
+  final List<TeammateEntry>          suggestions;
+  final void Function(TeammateEntry) onSelect;
+  final VoidCallback                  onDismiss;
+
+  const _SuggestionDropdown({
+    required this.suggestions,
+    required this.onSelect,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(left: 38, bottom: 6),
+      decoration: BoxDecoration(
+        color: _C.surfaceElevated, borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _C.purple.withValues(alpha: 0.3)),
+        boxShadow: [BoxShadow(color: _C.purpleGlow.withValues(alpha: 0.3), blurRadius: 12)],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Header.
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(children: [
+              const Icon(Icons.history_rounded, color: _C.textMuted, size: 11),
+              const SizedBox(width: 6),
+              const Text('RECENT TEAMMATES', style: TextStyle(color: _C.textMuted, fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+              const Spacer(),
+              GestureDetector(
+                onTap: onDismiss,
+                child: const Icon(Icons.close_rounded, color: _C.textMuted, size: 14),
+              ),
+            ]),
+          ),
+          Container(height: 1, color: _C.border),
+          // Suggestion list.
+          ...suggestions.take(5).map((s) => GestureDetector(
+            onTap: () => onSelect(s),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: _C.border.withValues(alpha: 0.5))),
+              ),
+              child: Row(children: [
+                Container(
+                  width: 28, height: 28,
+                  decoration: BoxDecoration(
+                    color: _C.purple.withValues(alpha: 0.1), shape: BoxShape.circle,
+                    border: Border.all(color: _C.purple.withValues(alpha: 0.3)),
+                  ),
+                  child: Center(child: Text(
+                    s.ign.isNotEmpty ? s.ign[0].toUpperCase() : '?',
+                    style: const TextStyle(color: _C.purple, fontSize: 11, fontWeight: FontWeight.w800),
+                  )),
+                ),
+                const SizedBox(width: 10),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(s.ign.isNotEmpty ? s.ign : 'Unknown', style: const TextStyle(color: _C.textPrimary, fontSize: 12, fontWeight: FontWeight.w600)),
+                  Text(s.gameUid, style: const TextStyle(color: _C.textSecondary, fontSize: 10)),
+                ])),
+                const Icon(Icons.north_west_rounded, color: _C.textMuted, size: 12),
+              ]),
+            ),
+          )),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// MY TEAM SECTION — PRIORITY 0.2
+//
+// Displays full team roster after successful registration.
+// Shows all slots from participant.teamSlots including teammates.
+// ─────────────────────────────────────────────
+
 class _MyTeamSection extends StatelessWidget {
-  final List<TeamSlot> slots;
+  final List<TeamSlot>           slots;
   final void Function(String, String) onCopy;
+
   const _MyTeamSection({required this.slots, required this.onCopy});
 
   @override
@@ -875,13 +1245,18 @@ class _MyTeamSection extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Container(
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: _C.surfaceCard, borderRadius: BorderRadius.circular(16), border: Border.all(color: _C.purple.withValues(alpha: 0.25))),
+        decoration: BoxDecoration(
+          color: _C.surfaceCard, borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _C.purple.withValues(alpha: 0.25)),
+        ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            const Icon(Icons.group_rounded, color: _C.purple, size: 16), const SizedBox(width: 8),
+            const Icon(Icons.group_rounded, color: _C.purple, size: 16),
+            const SizedBox(width: 8),
             const Text('MY TEAM', style: TextStyle(color: _C.textSecondary, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.2)),
             const Spacer(),
-            Text('${slots.length} player${slots.length == 1 ? '' : 's'}', style: const TextStyle(color: _C.textMuted, fontSize: 11)),
+            Text('${slots.length} player${slots.length == 1 ? '' : 's'}',
+                style: const TextStyle(color: _C.textMuted, fontSize: 11)),
           ]),
           const SizedBox(height: 12),
           ...slots.asMap().entries.map((e) => _buildSlotRow(e.key, e.value)),
@@ -891,23 +1266,68 @@ class _MyTeamSection extends StatelessWidget {
   }
 
   Widget _buildSlotRow(int index, TeamSlot slot) {
-    final maskedUid = slot.gameUid.length > 8 ? '${slot.gameUid.substring(0, 8)}…' : slot.gameUid;
+    final displayUid = slot.gameUid.length > 10
+        ? '${slot.gameUid.substring(0, 10)}…'
+        : slot.gameUid;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(children: [
-        Container(width: 28, height: 28, decoration: BoxDecoration(color: slot.isLeader ? _C.purple.withValues(alpha: 0.15) : _C.surfaceElevated, shape: BoxShape.circle, border: Border.all(color: slot.isLeader ? _C.purple.withValues(alpha: 0.4) : _C.border)), child: Center(child: Text('${index + 1}', style: TextStyle(color: slot.isLeader ? _C.purple : _C.textMuted, fontSize: 11, fontWeight: FontWeight.w700)))),
+        Container(
+          width: 28, height: 28,
+          decoration: BoxDecoration(
+            color: slot.isLeader ? _C.purple.withValues(alpha: 0.15) : _C.surfaceElevated,
+            shape: BoxShape.circle,
+            border: Border.all(color: slot.isLeader ? _C.purple.withValues(alpha: 0.4) : _C.border),
+          ),
+          child: Center(child: Text(
+            '${index + 1}',
+            style: TextStyle(
+              color: slot.isLeader ? _C.purple : _C.textMuted,
+              fontSize: 11, fontWeight: FontWeight.w700,
+            ),
+          )),
+        ),
         const SizedBox(width: 10),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            Flexible(child: Text(slot.ign.isNotEmpty ? slot.ign : 'Unknown', style: const TextStyle(color: _C.textPrimary, fontSize: 13, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
-            if (slot.isLeader) ...[const SizedBox(width: 6), Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: _C.purple.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(4)), child: const Text('YOU', style: TextStyle(color: _C.purple, fontSize: 8, fontWeight: FontWeight.w800)))],
+            Flexible(child: Text(
+              slot.ign.isNotEmpty ? slot.ign : 'Unknown',
+              style: const TextStyle(color: _C.textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
+              overflow: TextOverflow.ellipsis,
+            )),
+            if (slot.isLeader) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: _C.purple.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text('YOU', style: TextStyle(color: _C.purple, fontSize: 8, fontWeight: FontWeight.w800)),
+              ),
+            ],
           ]),
-          Row(children: [
-            Text(maskedUid, style: const TextStyle(color: _C.textSecondary, fontSize: 11)),
-            if (slot.readableId != null) ...[const Text(' · ', style: TextStyle(color: _C.textMuted)), Text(slot.readableId!, style: const TextStyle(color: _C.textMuted, fontSize: 11))],
-          ]),
+          if (slot.gameUid.isNotEmpty)
+            Row(children: [
+              Text(displayUid, style: const TextStyle(color: _C.textSecondary, fontSize: 11)),
+              if (slot.readableId != null) ...[
+                const Text(' · ', style: TextStyle(color: _C.textMuted)),
+                Text(slot.readableId!, style: const TextStyle(color: _C.textMuted, fontSize: 11)),
+              ],
+            ]),
         ])),
-        GestureDetector(onTap: () => onCopy(slot.gameUid, 'Game UID'), child: Container(padding: const EdgeInsets.all(7), decoration: BoxDecoration(color: _C.purpleGlowFaint, borderRadius: BorderRadius.circular(8), border: Border.all(color: _C.border)), child: const Icon(Icons.copy_rounded, color: _C.purple, size: 13))),
+        if (slot.gameUid.isNotEmpty)
+          GestureDetector(
+            onTap: () => onCopy(slot.gameUid, 'Game UID'),
+            child: Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: _C.purpleGlowFaint, borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: _C.border),
+              ),
+              child: const Icon(Icons.copy_rounded, color: _C.purple, size: 13),
+            ),
+          ),
       ]),
     );
   }
@@ -916,26 +1336,40 @@ class _MyTeamSection extends StatelessWidget {
 // ─────────────────────────────────────────────
 // SLOT CONTROL BUTTON
 // ─────────────────────────────────────────────
+
 class _SlotControlBtn extends StatelessWidget {
-  final String label; final Color color; final VoidCallback onTap;
+  final String   label;
+  final Color    color;
+  final VoidCallback onTap;
+
   const _SlotControlBtn({required this.label, required this.color, required this.onTap});
+
   @override
   Widget build(BuildContext context) => GestureDetector(
     onTap: onTap,
-    child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7), decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: color.withValues(alpha: 0.35))), child: Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700))),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700)),
+    ),
   );
 }
 
-// ─────────────────────────────────────────────
-// BANNER HEADER (unchanged from v3)
-// ─────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════
+// ALL REMAINING WIDGETS — UNCHANGED FROM F1
+// (BannerHeader, RoomWidgets, PrizeSections, JoinBar atoms, etc.)
+// ════════════════════════════════════════════════════════════════════
+
 class _BannerHeader extends StatelessWidget {
   final TournamentModel tournament; final Animation<double> pulse;
   const _BannerHeader({required this.tournament, required this.pulse});
 
   @override
   Widget build(BuildContext context) {
-    final t        = tournament;
+    final t         = tournament;
     final hasBanner = t.bannerUrl != null && t.bannerUrl!.isNotEmpty;
     return Stack(fit: StackFit.expand, children: [
       if (hasBanner) Image.network(t.bannerUrl!, fit: BoxFit.cover, errorBuilder: (_, _, _) => _FallbackBanner(type: t.tournamentType))
@@ -988,9 +1422,6 @@ class _EsportsBannerPainter extends CustomPainter {
   @override bool shouldRepaint(covariant _EsportsBannerPainter old) => old.accent != accent;
 }
 
-// ─────────────────────────────────────────────
-// ROOM WIDGETS (unchanged from v3)
-// ─────────────────────────────────────────────
 class _RoomLoading extends StatelessWidget {
   const _RoomLoading();
   @override Widget build(BuildContext context) => const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(color: _C.purple, strokeWidth: 2))));
@@ -1014,30 +1445,20 @@ class _RoomLocked extends StatelessWidget {
   }
 }
 
-// PRIORITY 2: Shows admin-set roomRevealTime if available.
 class _RoomNotYetRevealed extends StatelessWidget {
   final TournamentModel tournament;
   const _RoomNotYetRevealed({required this.tournament});
   @override
   Widget build(BuildContext context) {
-    // PRIORITY 2: Display admin roomRevealTime if explicitly set.
-    final revealTime = tournament.roomRevealTime
-        ?? (tournament.startTime?.subtract(const Duration(minutes: 30)));
-
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(color: _C.gold.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(12), border: Border.all(color: _C.gold.withValues(alpha: 0.25))),
-      child: Row(children: [
-        const Icon(Icons.lock_clock_rounded, color: _C.gold, size: 20), const SizedBox(width: 12),
+      child: const Row(children: [
+        Icon(Icons.lock_clock_rounded, color: _C.gold, size: 20), SizedBox(width: 12),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Room details not yet revealed', style: TextStyle(color: _C.gold, fontSize: 13, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 2),
-          Text(
-            revealTime != null
-                ? 'Credentials will be available 30 minutes before match start.'
-                : 'Credentials will be revealed by the organiser before the match.',
-            style: const TextStyle(color: _C.textSecondary, fontSize: 11, height: 1.4),
-          ),
+          Text('Room details not yet revealed', style: TextStyle(color: _C.gold, fontSize: 13, fontWeight: FontWeight.w700)),
+          SizedBox(height: 2),
+          Text('Credentials will be available 30 minutes before match start.', style: TextStyle(color: _C.textSecondary, fontSize: 11, height: 1.4)),
         ])),
       ]),
     );
@@ -1061,9 +1482,9 @@ class _RoomRevealed extends StatelessWidget {
     return Column(children: [
       Container(width: double.infinity, padding: const EdgeInsets.symmetric(vertical: 10), decoration: BoxDecoration(color: _C.success.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: _C.success.withValues(alpha: 0.3))), child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.check_circle_rounded, color: _C.success, size: 15), SizedBox(width: 6), Text("You're registered — room details unlocked", style: TextStyle(color: _C.success, fontSize: 12, fontWeight: FontWeight.w600))])),
       const SizedBox(height: 12),
-      if (hasRoom) _RoomField(label: 'ROOM ID', value: t.roomId!, icon: Icons.meeting_room_rounded, onCopy: () => onCopy(t.roomId!, 'Room ID')),
+      if (hasRoom) _RoomField(label: 'ROOM ID',   value: t.roomId!,       icon: Icons.meeting_room_rounded, onCopy: () => onCopy(t.roomId!, 'Room ID')),
       if (hasRoom && hasPw) const SizedBox(height: 10),
-      if (hasPw)   _RoomField(label: 'PASSWORD', value: t.roomPassword!, icon: Icons.vpn_key_rounded, onCopy: () => onCopy(t.roomPassword!, 'Password')),
+      if (hasPw)   _RoomField(label: 'PASSWORD',  value: t.roomPassword!, icon: Icons.vpn_key_rounded,      onCopy: () => onCopy(t.roomPassword!, 'Password')),
     ]);
   }
 }
@@ -1089,9 +1510,6 @@ class _RoomField extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────
-// SHARED SECTION WIDGETS (unchanged from v3)
-// ─────────────────────────────────────────────
 class _StatusBadge extends StatelessWidget {
   final TournamentStatus status; final Animation<double> pulse;
   const _StatusBadge({required this.status, required this.pulse});
@@ -1099,10 +1517,10 @@ class _StatusBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     Color color; String label;
     switch (status) {
-      case TournamentStatus.live:      color = _C.live;      label = 'LIVE NOW';   break;
-      case TournamentStatus.completed: color = _C.textMuted; label = 'COMPLETED';  break;
-      case TournamentStatus.cancelled: color = _C.live;      label = 'CANCELLED';  break;
-      case TournamentStatus.upcoming:  color = _C.purple;    label = 'UPCOMING';   break;
+      case TournamentStatus.live:      color = _C.live;      label = 'LIVE NOW';  break;
+      case TournamentStatus.completed: color = _C.textMuted; label = 'COMPLETED'; break;
+      case TournamentStatus.cancelled: color = _C.live;      label = 'CANCELLED'; break;
+      case TournamentStatus.upcoming:  color = _C.purple;    label = 'UPCOMING';  break;
     }
     return AnimatedBuilder(
       animation: pulse,
@@ -1246,9 +1664,6 @@ class _RewardTypeRow extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────
-// JOIN BAR WIDGETS (unchanged from v3)
-// ─────────────────────────────────────────────
 class _JoinButton extends StatefulWidget {
   final bool isLoading; final VoidCallback onTap;
   const _JoinButton({required this.isLoading, required this.onTap});

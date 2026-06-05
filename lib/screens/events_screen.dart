@@ -1,19 +1,23 @@
 // lib/screens/events_screen.dart
 // ─────────────────────────────────────────────
-// SHADOW STORM — Events Screen (Phase F1)
+// SHADOW STORM — Events Screen (Phase F2.5 / PRE-F3)
 //
-// Changes from v1:
-//   PRIORITY 2: Room reveal logic removed from this screen entirely.
-//     _RoomRevealedSection and _roomRevealed getter in UpcomingEventCard
-//     now call TournamentService.instance.isRoomRevealed(tournament)
-//     instead of computing the reveal time locally.
-//     This ensures both EventsScreen and TournamentDetailsScreen
-//     use the exact same reveal logic and obey admin's roomRevealTime.
+// Changes from Phase F1:
+//   PRIORITY 0.2 — MY TEAM display on event cards:
+//     UpcomingEventCard and OngoingEventCard now show ALL teammate IGNs
+//     sourced from participant.teamIgns (stored during joinWithTeam).
+//     Falls back to leader IGN only if teamIgns is absent (legacy data).
 //
-//   PRIORITY 3: Scaffold is wrapped with MaintenanceGuard.
-//     When maintenanceMode=true the maintenance screen is shown.
+//   PRIORITY 2 — No blank sections:
+//     Each tab's empty state has a specific message.
+//     No blank containers shown while loading — shimmer cards used.
 //
-//   All original v1 widgets, tab structure, and animations intact.
+//   PRIORITY 7 (F1 unchanged): Room reveal calls
+//     TournamentService.instance.isRoomRevealed(t) — single source of truth.
+//
+//   PRIORITY 3 (F1 unchanged): MaintenanceGuard wraps Scaffold.
+//
+//   All original v1 widgets, tab structure, card animations intact.
 // ─────────────────────────────────────────────
 
 import 'dart:async';
@@ -50,12 +54,14 @@ class _C {
 // PARTICIPANT MODEL
 // ─────────────────────────────────────────────
 class ParticipantData {
-  final String userId;
+  final String   userId;
   final DateTime? joinedAt;
-  final int? placement;
-  final int? kills;
-  final double? winnings;
-  final String status;
+  final int?     placement;
+  final int?     kills;
+  final double?  winnings;
+  final String   status;
+  // PRIORITY 0.2: full team IGN list from teamIgns[]
+  final List<String> teamIgns;
 
   const ParticipantData({
     required this.userId,
@@ -64,18 +70,28 @@ class ParticipantData {
     this.kills,
     this.winnings,
     required this.status,
+    this.teamIgns = const [],
   });
 
   factory ParticipantData.fromDoc(DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>? ?? {};
+    final rawIgns = d['teamIgns'] as List<dynamic>? ?? [];
     return ParticipantData(
-      userId:    d['userId']    as String? ?? doc.id,
-      joinedAt:  (d['joinedAt'] as Timestamp?)?.toDate(),
-      placement: (d['placement'] as num?)?.toInt(),
-      kills:     (d['kills']     as num?)?.toInt(),
-      winnings:  (d['winnings']  as num?)?.toDouble(),
-      status:    d['status']    as String? ?? 'registered',
+      userId:   d['userId']    as String? ?? doc.id,
+      joinedAt: (d['joinedAt'] as Timestamp?)?.toDate(),
+      placement:(d['placement'] as num?)?.toInt(),
+      kills:    (d['kills']     as num?)?.toInt(),
+      winnings: (d['winnings']  as num?)?.toDouble(),
+      status:   d['status']    as String? ?? 'registered',
+      teamIgns: rawIgns.map((e) => e.toString()).toList(),
     );
+  }
+
+  /// Display string for the team — all IGNs joined, or just leader IGN.
+  String get teamDisplay {
+    if (teamIgns.isEmpty) return '';
+    if (teamIgns.length == 1) return teamIgns.first;
+    return teamIgns.join(' · ');
   }
 }
 
@@ -91,16 +107,16 @@ class EventsScreen extends StatefulWidget {
 
 class _EventsScreenState extends State<EventsScreen>
     with TickerProviderStateMixin {
-  late TabController _tabCtrl;
+  late TabController       _tabCtrl;
   late AnimationController _fadeCtrl;
-  late Animation<double> _fadeIn;
+  late Animation<double>   _fadeIn;
   late AnimationController _pulseCtrl;
-  late Animation<double> _pulse;
+  late Animation<double>   _pulse;
 
   final TournamentService _service = TournamentService.instance;
   final FirebaseFirestore _db      = FirebaseFirestore.instance;
 
-  User? get _user   => FirebaseAuth.instance.currentUser;
+  User?   get _user   => FirebaseAuth.instance.currentUser;
   String? get _userId => _user?.uid;
 
   final Map<String, ParticipantData> _participantCache = {};
@@ -108,17 +124,11 @@ class _EventsScreenState extends State<EventsScreen>
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 3, vsync: this);
-
-    _fadeCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 600),
-    )..forward();
-    _fadeIn = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOutCubic);
-
-    _pulseCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 2000),
-    )..repeat(reverse: true);
-    _pulse = CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut);
+    _tabCtrl  = TabController(length: 3, vsync: this);
+    _fadeCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600))..forward();
+    _fadeIn   = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOutCubic);
+    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 2000))..repeat(reverse: true);
+    _pulse    = CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut);
   }
 
   @override
@@ -154,7 +164,7 @@ class _EventsScreenState extends State<EventsScreen>
     Navigator.push(
       context,
       PageRouteBuilder(
-        pageBuilder: (_, anim, _) => TournamentDetailsScreen(tournament: t),
+        pageBuilder:        (_, anim, _) => TournamentDetailsScreen(tournament: t),
         transitionsBuilder: (_, anim, _, child) => FadeTransition(
           opacity: CurvedAnimation(parent: anim, curve: Curves.easeOutCubic),
           child: child,
@@ -166,7 +176,6 @@ class _EventsScreenState extends State<EventsScreen>
 
   // ─────────────────────────────────────────────
   // BUILD
-  // PRIORITY 3: MaintenanceGuard wraps the Scaffold.
   // ─────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
@@ -181,21 +190,9 @@ class _EventsScreenState extends State<EventsScreen>
             body: TabBarView(
               controller: _tabCtrl,
               children: [
-                _EventsTab(
-                  userId: _userId, statusFilter: TournamentStatus.upcoming,
-                  service: _service, pulse: _pulse, onTap: _openDetails,
-                  getParticipant: _getParticipant,
-                ),
-                _EventsTab(
-                  userId: _userId, statusFilter: TournamentStatus.live,
-                  service: _service, pulse: _pulse, onTap: _openDetails,
-                  getParticipant: _getParticipant,
-                ),
-                _EventsTab(
-                  userId: _userId, statusFilter: TournamentStatus.completed,
-                  service: _service, pulse: _pulse, onTap: _openDetails,
-                  getParticipant: _getParticipant,
-                ),
+                _EventsTab(userId: _userId, statusFilter: TournamentStatus.upcoming,  service: _service, pulse: _pulse, onTap: _openDetails, getParticipant: _getParticipant),
+                _EventsTab(userId: _userId, statusFilter: TournamentStatus.live,      service: _service, pulse: _pulse, onTap: _openDetails, getParticipant: _getParticipant),
+                _EventsTab(userId: _userId, statusFilter: TournamentStatus.completed, service: _service, pulse: _pulse, onTap: _openDetails, getParticipant: _getParticipant),
               ],
             ),
           ),
@@ -213,21 +210,17 @@ class _EventsScreenState extends State<EventsScreen>
       automaticallyImplyLeading: false,
       title: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(children: [
-              Container(width: 3, height: 18, decoration: BoxDecoration(color: _C.purple, borderRadius: BorderRadius.circular(2))),
-              const SizedBox(width: 8),
-              const Text('MY EVENTS', style: TextStyle(color: _C.textPrimary, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
-              const SizedBox(width: 8),
-              const Text('DASHBOARD', style: TextStyle(color: _C.purple, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
-            ]),
-            const SizedBox(height: 2),
-            Text(_user?.displayName ?? 'Player', style: const TextStyle(color: _C.textMuted, fontSize: 11, fontWeight: FontWeight.w500)),
-          ],
-        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Row(children: [
+            Container(width: 3, height: 18, decoration: BoxDecoration(color: _C.purple, borderRadius: BorderRadius.circular(2))),
+            const SizedBox(width: 8),
+            const Text('MY EVENTS', style: TextStyle(color: _C.textPrimary, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
+            const SizedBox(width: 8),
+            const Text('DASHBOARD', style: TextStyle(color: _C.purple, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
+          ]),
+          const SizedBox(height: 2),
+          Text(_user?.displayName ?? 'Player', style: const TextStyle(color: _C.textMuted, fontSize: 11, fontWeight: FontWeight.w500)),
+        ]),
       ),
       bottom: PreferredSize(
         preferredSize: const Size.fromHeight(52),
@@ -266,11 +259,10 @@ class _EventTab extends StatelessWidget {
 class _TabChip extends StatelessWidget {
   final String label; final IconData icon; final Color color; final TabController tabCtrl;
   const _TabChip({required this.label, required this.icon, required this.color, required this.tabCtrl});
-
   @override
   Widget build(BuildContext context) {
     const tabs = ['UPCOMING', 'ONGOING', 'COMPLETED'];
-    final idx = tabs.indexOf(label);
+    final idx  = tabs.indexOf(label);
     return AnimatedBuilder(
       animation: tabCtrl,
       builder: (_, _) {
@@ -298,25 +290,21 @@ class _TabChip extends StatelessWidget {
 // EVENTS TAB
 // ─────────────────────────────────────────────
 class _EventsTab extends StatelessWidget {
-  final String? userId;
-  final TournamentStatus statusFilter;
-  final TournamentService service;
-  final Animation<double> pulse;
-  final void Function(TournamentModel) onTap;
-  final Future<ParticipantData?> Function(String) getParticipant;
+  final String?            userId;
+  final TournamentStatus   statusFilter;
+  final TournamentService  service;
+  final Animation<double>  pulse;
+  final void Function(TournamentModel)              onTap;
+  final Future<ParticipantData?> Function(String)   getParticipant;
 
-  const _EventsTab({
-    required this.userId, required this.statusFilter, required this.service,
-    required this.pulse, required this.onTap, required this.getParticipant,
-  });
+  const _EventsTab({required this.userId, required this.statusFilter, required this.service, required this.pulse, required this.onTap, required this.getParticipant});
 
   @override
   Widget build(BuildContext context) {
     if (userId == null) return const _NotLoggedIn();
 
     return RefreshIndicator(
-      color: _C.purple,
-      backgroundColor: _C.surfaceCard,
+      color: _C.purple, backgroundColor: _C.surfaceCard,
       onRefresh: () async => await Future.delayed(const Duration(milliseconds: 800)),
       child: StreamBuilder<List<TournamentModel>>(
         stream: service.joinedTournamentsStream(userId!),
@@ -324,22 +312,21 @@ class _EventsTab extends StatelessWidget {
           if (snap.connectionState == ConnectionState.waiting) return _LoadingList();
           if (snap.hasError) return _ErrorState(message: snap.error.toString());
 
-          final all      = snap.data ?? [];
-          final filtered = all.where((t) => t.status == statusFilter).toList();
-
+          final filtered = (snap.data ?? []).where((t) => t.status == statusFilter).toList();
           if (filtered.isEmpty) return _EmptyState(status: statusFilter);
 
           return ListView.builder(
             physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
             itemCount: filtered.length,
-            itemBuilder: (ctx, i) {
-              return _EventCardWrapper(
-                tournament: filtered[i], statusFilter: statusFilter,
-                pulse: pulse, onTap: onTap,
-                getParticipant: getParticipant, animIndex: i,
-              );
-            },
+            itemBuilder: (ctx, i) => _EventCardWrapper(
+              tournament:    filtered[i],
+              statusFilter:  statusFilter,
+              pulse:         pulse,
+              onTap:         onTap,
+              getParticipant: getParticipant,
+              animIndex:     i,
+            ),
           );
         },
       ),
@@ -351,17 +338,14 @@ class _EventsTab extends StatelessWidget {
 // EVENT CARD WRAPPER
 // ─────────────────────────────────────────────
 class _EventCardWrapper extends StatefulWidget {
-  final TournamentModel tournament;
-  final TournamentStatus statusFilter;
-  final Animation<double> pulse;
+  final TournamentModel              tournament;
+  final TournamentStatus             statusFilter;
+  final Animation<double>            pulse;
   final void Function(TournamentModel) onTap;
   final Future<ParticipantData?> Function(String) getParticipant;
-  final int animIndex;
+  final int                          animIndex;
 
-  const _EventCardWrapper({
-    required this.tournament, required this.statusFilter, required this.pulse,
-    required this.onTap, required this.getParticipant, required this.animIndex,
-  });
+  const _EventCardWrapper({required this.tournament, required this.statusFilter, required this.pulse, required this.onTap, required this.getParticipant, required this.animIndex});
 
   @override
   State<_EventCardWrapper> createState() => _EventCardWrapperState();
@@ -370,17 +354,17 @@ class _EventCardWrapper extends StatefulWidget {
 class _EventCardWrapperState extends State<_EventCardWrapper>
     with SingleTickerProviderStateMixin {
   late AnimationController _slideCtrl;
-  late Animation<Offset> _slide;
-  late Animation<double> _fade;
-  ParticipantData? _participant;
+  late Animation<Offset>   _slide;
+  late Animation<double>   _fade;
+  ParticipantData?         _participant;
 
   @override
   void initState() {
     super.initState();
     _slideCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 450));
-    _slide = Tween<Offset>(begin: const Offset(0, 0.12), end: Offset.zero)
+    _slide     = Tween<Offset>(begin: const Offset(0, 0.12), end: Offset.zero)
         .animate(CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOutCubic));
-    _fade = CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOut);
+    _fade      = CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOut);
     Future.delayed(Duration(milliseconds: 60 * widget.animIndex), () {
       if (mounted) _slideCtrl.forward();
     });
@@ -420,10 +404,11 @@ class _EventCardWrapperState extends State<_EventCardWrapper>
 
 // ═════════════════════════════════════════════
 // UPCOMING EVENT CARD
-// PRIORITY 2: _roomRevealed now delegates to TournamentService.isRoomRevealed()
+// PRIORITY 0.2: teamDisplay shows all teammate IGNs.
+// PRIORITY 7: _roomRevealed delegates to TournamentService.isRoomRevealed().
 // ═════════════════════════════════════════════
 class UpcomingEventCard extends StatefulWidget {
-  final TournamentModel tournament;
+  final TournamentModel  tournament;
   final ParticipantData? participant;
   final void Function(TournamentModel) onTap;
   const UpcomingEventCard({super.key, required this.tournament, required this.participant, required this.onTap});
@@ -431,10 +416,10 @@ class UpcomingEventCard extends StatefulWidget {
 }
 
 class _UpcomingEventCardState extends State<UpcomingEventCard> {
-  Timer? _timer;
+  Timer?   _timer;
   Duration _matchCountdown  = Duration.zero;
   Duration _revealCountdown = Duration.zero;
-  bool _pressed = false;
+  bool     _pressed         = false;
 
   @override
   void initState() { super.initState(); _startTimer(); }
@@ -452,38 +437,35 @@ class _UpcomingEventCardState extends State<UpcomingEventCard> {
     final now       = DateTime.now();
     final startTime = widget.tournament.startTime;
     if (startTime == null) return;
-
     final matchDiff  = startTime.difference(now);
-    // Reveal countdown: use admin roomRevealTime if set, else 30-min rule.
     final revealTime = widget.tournament.roomRevealTime
         ?? startTime.subtract(const Duration(minutes: 30));
     final revealDiff = revealTime.difference(now);
-
     setState(() {
       _matchCountdown  = matchDiff.isNegative  ? Duration.zero : matchDiff;
       _revealCountdown = revealDiff.isNegative ? Duration.zero : revealDiff;
     });
   }
 
-  // PRIORITY 2: Single source of truth — delegate to TournamentService.
-  bool get _roomRevealed =>
-      TournamentService.instance.isRoomRevealed(widget.tournament);
+  // PRIORITY 7: Single source of truth.
+  bool get _roomRevealed => TournamentService.instance.isRoomRevealed(widget.tournament);
 
   @override
   Widget build(BuildContext context) {
-    final t = widget.tournament;
+    final t           = widget.tournament;
+    final participant = widget.participant;
+
     return GestureDetector(
       onTap: () => widget.onTap(t),
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) => setState(() => _pressed = false),
-      onTapCancel: () => setState(() => _pressed = false),
+      onTapDown:   (_) => setState(() => _pressed = true),
+      onTapUp:     (_) => setState(() => _pressed = false),
+      onTapCancel: ()  => setState(() => _pressed = false),
       child: AnimatedScale(
         scale: _pressed ? 0.985 : 1.0,
         duration: const Duration(milliseconds: 100),
         child: Container(
           decoration: BoxDecoration(
-            color: _C.surfaceCard,
-            borderRadius: BorderRadius.circular(20),
+            color: _C.surfaceCard, borderRadius: BorderRadius.circular(20),
             border: Border.all(color: _C.gold.withValues(alpha: 0.25)),
             boxShadow: [BoxShadow(color: _C.gold.withValues(alpha: 0.04), blurRadius: 16)],
           ),
@@ -498,19 +480,26 @@ class _UpcomingEventCardState extends State<UpcomingEventCard> {
                 ]),
                 const SizedBox(height: 2),
                 Text(t.subtitle, style: const TextStyle(color: _C.textSecondary, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+
+                // PRIORITY 0.2: Show team IGNs if this is a team tournament.
+                if (participant != null && participant.teamIgns.length > 1) ...[
+                  const SizedBox(height: 6),
+                  _TeamIgnsRow(teamDisplay: participant.teamDisplay),
+                ],
+
                 const SizedBox(height: 14),
                 Row(children: [
-                  _MiniStat(icon: Icons.emoji_events_rounded, label: 'PRIZE', value: t.prizePoolDisplay, color: _C.gold),
+                  _MiniStat(icon: Icons.emoji_events_rounded, label: 'PRIZE',  value: t.prizePoolDisplay, color: _C.gold),
                   const SizedBox(width: 12),
-                  _MiniStat(icon: Icons.payments_rounded, label: 'ENTRY', value: t.entryFeeDisplay, color: t.entryFee > 0 ? _C.textSecondary : _C.success),
+                  _MiniStat(icon: Icons.payments_rounded,     label: 'ENTRY',  value: t.entryFeeDisplay,  color: t.entryFee > 0 ? _C.textSecondary : _C.success),
                   const SizedBox(width: 12),
-                  _MiniStat(icon: Icons.people_rounded, label: 'SLOTS', value: '${t.joinedPlayers}/${t.maxPlayers}', color: _C.purpleLight),
+                  _MiniStat(icon: Icons.people_rounded,       label: 'SLOTS',  value: '${t.joinedPlayers}/${t.maxPlayers}', color: _C.purpleLight),
                 ]),
                 const SizedBox(height: 14),
                 Container(height: 1, color: _C.border),
                 const SizedBox(height: 14),
                 Row(children: [
-                  Expanded(child: _CountdownBlock(label: 'MATCH STARTS IN', duration: _matchCountdown, color: _C.gold, icon: Icons.schedule_rounded)),
+                  Expanded(child: _CountdownBlock(label: 'MATCH STARTS IN', duration: _matchCountdown,  color: _C.gold,   icon: Icons.schedule_rounded)),
                   const SizedBox(width: 12),
                   Expanded(child: _roomRevealed
                       ? _RoomReadyBlock()
@@ -532,10 +521,11 @@ class _UpcomingEventCardState extends State<UpcomingEventCard> {
 }
 
 // ═════════════════════════════════════════════
-// ONGOING EVENT CARD (unchanged from v1)
+// ONGOING EVENT CARD
+// PRIORITY 0.2: teamDisplay shows all teammate IGNs.
 // ═════════════════════════════════════════════
 class OngoingEventCard extends StatefulWidget {
-  final TournamentModel tournament;
+  final TournamentModel  tournament;
   final ParticipantData? participant;
   final Animation<double> pulse;
   final void Function(TournamentModel) onTap;
@@ -562,12 +552,14 @@ class _OngoingEventCardState extends State<OngoingEventCard> {
 
   @override
   Widget build(BuildContext context) {
-    final t = widget.tournament;
+    final t           = widget.tournament;
+    final participant = widget.participant;
+
     return GestureDetector(
       onTap: () => widget.onTap(t),
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) => setState(() => _pressed = false),
-      onTapCancel: () => setState(() => _pressed = false),
+      onTapDown:   (_) => setState(() => _pressed = true),
+      onTapUp:     (_) => setState(() => _pressed = false),
+      onTapCancel: ()  => setState(() => _pressed = false),
       child: AnimatedScale(
         scale: _pressed ? 0.985 : 1.0,
         duration: const Duration(milliseconds: 100),
@@ -575,8 +567,7 @@ class _OngoingEventCardState extends State<OngoingEventCard> {
           animation: widget.pulse,
           builder: (_, child) => Container(
             decoration: BoxDecoration(
-              color: _C.surfaceCard,
-              borderRadius: BorderRadius.circular(20),
+              color: _C.surfaceCard, borderRadius: BorderRadius.circular(20),
               border: Border.all(color: _C.live.withValues(alpha: 0.25 + 0.15 * widget.pulse.value), width: 1.5),
               boxShadow: [BoxShadow(color: _C.live.withValues(alpha: 0.05 + 0.04 * widget.pulse.value), blurRadius: 20)],
             ),
@@ -603,11 +594,18 @@ class _OngoingEventCardState extends State<OngoingEventCard> {
                 Text(t.title, style: const TextStyle(color: _C.textPrimary, fontSize: 17, fontWeight: FontWeight.w800, height: 1.2), maxLines: 1, overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 2),
                 Text(t.subtitle, style: const TextStyle(color: _C.textSecondary, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+
+                // PRIORITY 0.2: Show team IGNs.
+                if (participant != null && participant.teamIgns.length > 1) ...[
+                  const SizedBox(height: 6),
+                  _TeamIgnsRow(teamDisplay: participant.teamDisplay),
+                ],
+
                 const SizedBox(height: 14),
                 Row(children: [
-                  _MiniStat(icon: Icons.people_rounded, label: 'IN MATCH', value: '${t.joinedPlayers}/${t.maxPlayers}', color: _C.purpleLight),
+                  _MiniStat(icon: Icons.people_rounded,       label: 'IN MATCH', value: '${t.joinedPlayers}/${t.maxPlayers}', color: _C.purpleLight),
                   const SizedBox(width: 12),
-                  _MiniStat(icon: Icons.emoji_events_rounded, label: 'PRIZE', value: t.prizePoolDisplay, color: _C.gold),
+                  _MiniStat(icon: Icons.emoji_events_rounded, label: 'PRIZE',    value: t.prizePoolDisplay,                   color: _C.gold),
                 ]),
                 const SizedBox(height: 14),
                 Container(height: 1, color: _C.border),
@@ -627,10 +625,10 @@ class _OngoingEventCardState extends State<OngoingEventCard> {
 }
 
 // ═════════════════════════════════════════════
-// COMPLETED EVENT CARD (unchanged from v1)
+// COMPLETED EVENT CARD (unchanged from F1)
 // ═════════════════════════════════════════════
 class CompletedEventCard extends StatefulWidget {
-  final TournamentModel tournament;
+  final TournamentModel  tournament;
   final ParticipantData? participant;
   final void Function(TournamentModel) onTap;
   const CompletedEventCard({super.key, required this.tournament, required this.participant, required this.onTap});
@@ -652,9 +650,9 @@ class _CompletedEventCardState extends State<CompletedEventCard> {
   String get _resultLabel {
     final p = widget.participant?.placement;
     if (p == null) return 'N/A';
-    if (p == 1) return '🥇 WINNER';
-    if (p == 2) return '🥈 2nd';
-    if (p == 3) return '🥉 3rd';
+    if (p == 1)  return '🥇 WINNER';
+    if (p == 2)  return '🥈 2nd';
+    if (p == 3)  return '🥉 3rd';
     return '#$p';
   }
 
@@ -666,16 +664,15 @@ class _CompletedEventCardState extends State<CompletedEventCard> {
 
     return GestureDetector(
       onTap: () => widget.onTap(t),
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) => setState(() => _pressed = false),
-      onTapCancel: () => setState(() => _pressed = false),
+      onTapDown:   (_) => setState(() => _pressed = true),
+      onTapUp:     (_) => setState(() => _pressed = false),
+      onTapCancel: ()  => setState(() => _pressed = false),
       child: AnimatedScale(
         scale: _pressed ? 0.985 : 1.0,
         duration: const Duration(milliseconds: 100),
         child: Container(
           decoration: BoxDecoration(
-            color: _C.surfaceCard,
-            borderRadius: BorderRadius.circular(20),
+            color: _C.surfaceCard, borderRadius: BorderRadius.circular(20),
             border: Border.all(color: color.withValues(alpha: 0.2)),
             boxShadow: [BoxShadow(color: color.withValues(alpha: 0.04), blurRadius: 16)],
           ),
@@ -716,25 +713,20 @@ class _CompletedEventCardState extends State<CompletedEventCard> {
                 Container(height: 1, color: _C.border),
                 const SizedBox(height: 16),
                 Row(children: [
-                  _ResultStat(icon: Icons.leaderboard_rounded, label: 'PLACEMENT', value: p?.placement != null ? '#${p!.placement}' : '—', color: color),
+                  _ResultStat(icon: Icons.leaderboard_rounded,            label: 'PLACEMENT', value: p?.placement != null ? '#${p!.placement}' : '—', color: color),
                   _VertDivider(),
-                  _ResultStat(icon: Icons.sports_kabaddi_rounded, label: 'KILLS', value: p?.kills?.toString() ?? '—', color: _C.live),
+                  _ResultStat(icon: Icons.sports_kabaddi_rounded,         label: 'KILLS',     value: p?.kills?.toString() ?? '—', color: _C.live),
                   _VertDivider(),
-                  _ResultStat(icon: Icons.account_balance_wallet_rounded, label: 'WINNINGS', value: p?.winnings != null ? '₹${p!.winnings!.toInt()}' : '—', color: p?.winnings != null && p!.winnings! > 0 ? _C.success : _C.textMuted),
+                  _ResultStat(icon: Icons.account_balance_wallet_rounded, label: 'WINNINGS',  value: p?.winnings != null ? '₹${p!.winnings!.toInt()}' : '—', color: p?.winnings != null && p!.winnings! > 0 ? _C.success : _C.textMuted),
                 ]),
                 if (p?.winnings != null && p!.winnings! > 0) ...[
                   const SizedBox(height: 14),
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(colors: [_C.success.withValues(alpha: 0.12), _C.success.withValues(alpha: 0.04)]),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: _C.success.withValues(alpha: 0.3)),
-                    ),
+                    decoration: BoxDecoration(gradient: LinearGradient(colors: [_C.success.withValues(alpha: 0.12), _C.success.withValues(alpha: 0.04)]), borderRadius: BorderRadius.circular(12), border: Border.all(color: _C.success.withValues(alpha: 0.3))),
                     child: Row(children: [
-                      const Icon(Icons.workspace_premium_rounded, color: _C.success, size: 18),
-                      const SizedBox(width: 8),
+                      const Icon(Icons.workspace_premium_rounded, color: _C.success, size: 18), const SizedBox(width: 8),
                       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         const Text('WINNINGS EARNED', style: TextStyle(color: _C.success, fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 1)),
                         Text('₹${p.winnings!.toInt()}', style: const TextStyle(color: _C.success, fontSize: 20, fontWeight: FontWeight.w900)),
@@ -761,7 +753,37 @@ class _CompletedEventCardState extends State<CompletedEventCard> {
 }
 
 // ─────────────────────────────────────────────
-// SUB-WIDGETS (all unchanged from v1)
+// PRIORITY 0.2 — TEAM IGNs ROW
+// Shows all teammate IGNs on the event card.
+// ─────────────────────────────────────────────
+class _TeamIgnsRow extends StatelessWidget {
+  final String teamDisplay;
+  const _TeamIgnsRow({required this.teamDisplay});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: _C.purple.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _C.purple.withValues(alpha: 0.2)),
+      ),
+      child: Row(children: [
+        const Icon(Icons.group_rounded, color: _C.purpleLight, size: 12),
+        const SizedBox(width: 6),
+        Expanded(child: Text(
+          teamDisplay,
+          style: const TextStyle(color: _C.purpleLight, fontSize: 11, fontWeight: FontWeight.w600),
+          maxLines: 1, overflow: TextOverflow.ellipsis,
+        )),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// SUB-WIDGETS
 // ─────────────────────────────────────────────
 
 class _BannerImage extends StatelessWidget {
@@ -830,10 +852,7 @@ class _CountdownBlock extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(color: color.withValues(alpha: 0.07), borderRadius: BorderRadius.circular(12), border: Border.all(color: color.withValues(alpha: 0.2))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Icon(icon, color: color.withValues(alpha: 0.7), size: 11), const SizedBox(width: 4),
-          Text(label, style: TextStyle(color: color.withValues(alpha: 0.7), fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
-        ]),
+        Row(children: [Icon(icon, color: color.withValues(alpha: 0.7), size: 11), const SizedBox(width: 4), Text(label, style: TextStyle(color: color.withValues(alpha: 0.7), fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8))]),
         const SizedBox(height: 4),
         Text(duration.inSeconds <= 0 ? 'NOW' : _fmt(duration), style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
       ]),
@@ -848,10 +867,7 @@ class _RoomReadyBlock extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(color: _C.success.withValues(alpha: 0.07), borderRadius: BorderRadius.circular(12), border: Border.all(color: _C.success.withValues(alpha: 0.25))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Icon(Icons.lock_open_rounded, color: _C.success, size: 11), const SizedBox(width: 4),
-          Text('ROOM REVEALED', style: TextStyle(color: _C.success.withValues(alpha: 0.7), fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
-        ]),
+        Row(children: [const Icon(Icons.lock_open_rounded, color: _C.success, size: 11), const SizedBox(width: 4), Text('ROOM REVEALED', style: TextStyle(color: _C.success.withValues(alpha: 0.7), fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8))]),
         const SizedBox(height: 4),
         const Text('UNLOCKED', style: TextStyle(color: _C.success, fontSize: 14, fontWeight: FontWeight.w900)),
       ]),
@@ -859,8 +875,6 @@ class _RoomReadyBlock extends StatelessWidget {
   }
 }
 
-// PRIORITY 2: _RoomRevealedSection reads from tournament model only.
-// No local reveal logic — isRoomRevealed() is called in the card state.
 class _RoomRevealedSection extends StatelessWidget {
   final TournamentModel tournament;
   const _RoomRevealedSection({required this.tournament});
@@ -885,17 +899,14 @@ class _RoomRevealedSection extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(color: _C.gold.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(12), border: Border.all(color: _C.gold.withValues(alpha: 0.2))),
-        child: const Row(children: [
-          Icon(Icons.hourglass_top_rounded, color: _C.gold, size: 16), SizedBox(width: 8),
-          Text('Room details loading soon…', style: TextStyle(color: _C.gold, fontSize: 12, fontWeight: FontWeight.w600)),
-        ]),
+        child: const Row(children: [Icon(Icons.hourglass_top_rounded, color: _C.gold, size: 16), SizedBox(width: 8), Text('Room details loading soon…', style: TextStyle(color: _C.gold, fontSize: 12, fontWeight: FontWeight.w600))]),
       );
     }
 
     return Column(children: [
-      if (hasRoom) _CopyField(label: 'ROOM ID', value: t.roomId!, icon: Icons.meeting_room_rounded, onCopy: () => _copy(context, t.roomId!, 'Room ID')),
+      if (hasRoom) _CopyField(label: 'ROOM ID',   value: t.roomId!,       icon: Icons.meeting_room_rounded, onCopy: () => _copy(context, t.roomId!, 'Room ID')),
       if (hasRoom && hasPw) const SizedBox(height: 8),
-      if (hasPw) _CopyField(label: 'PASSWORD', value: t.roomPassword!, icon: Icons.vpn_key_rounded, onCopy: () => _copy(context, t.roomPassword!, 'Password')),
+      if (hasPw)   _CopyField(label: 'PASSWORD',  value: t.roomPassword!, icon: Icons.vpn_key_rounded,      onCopy: () => _copy(context, t.roomPassword!, 'Password')),
     ]);
   }
 }
@@ -926,9 +937,9 @@ class _OngoingRoomSection extends StatelessWidget {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Text('ROOM ACCESS', style: TextStyle(color: _C.textMuted, fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1)),
       const SizedBox(height: 8),
-      if (hasRoom) _CopyField(label: 'ROOM ID', value: t.roomId!, icon: Icons.meeting_room_rounded, onCopy: () => onCopy(t.roomId!, 'Room ID'), accentColor: _C.live),
+      if (hasRoom) _CopyField(label: 'ROOM ID',  value: t.roomId!,       icon: Icons.meeting_room_rounded, onCopy: () => onCopy(t.roomId!, 'Room ID'),           accentColor: _C.live),
       if (hasRoom && hasPw) const SizedBox(height: 8),
-      if (hasPw) _CopyField(label: 'PASSWORD', value: t.roomPassword!, icon: Icons.vpn_key_rounded, onCopy: () => onCopy(t.roomPassword!, 'Password'), accentColor: _C.live),
+      if (hasPw)   _CopyField(label: 'PASSWORD', value: t.roomPassword!, icon: Icons.vpn_key_rounded,      onCopy: () => onCopy(t.roomPassword!, 'Password'),     accentColor: _C.live),
     ]);
   }
 }
@@ -966,10 +977,7 @@ class _MiniStat extends StatelessWidget {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(label, style: const TextStyle(color: _C.textMuted, fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
       const SizedBox(height: 3),
-      Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, color: color, size: 11), const SizedBox(width: 4),
-        Text(value, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w800)),
-      ]),
+      Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: color, size: 11), const SizedBox(width: 4), Text(value, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w800))]),
     ]);
   }
 }
@@ -1032,8 +1040,7 @@ class _QuickAccessButton extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        width: double.infinity, padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
           color: outline ? Colors.transparent : color.withValues(alpha: 0.15),
           borderRadius: BorderRadius.circular(12),
@@ -1049,7 +1056,9 @@ class _QuickAccessButton extends StatelessWidget {
   }
 }
 
-// ─── State screens ─────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// STATE SCREENS
+// ─────────────────────────────────────────────
 
 class _NotLoggedIn extends StatelessWidget {
   const _NotLoggedIn();
@@ -1122,10 +1131,26 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     String emoji, title, subtitle;
     switch (status) {
-      case TournamentStatus.upcoming:  emoji = '📅'; title = 'No Upcoming Events';   subtitle = 'Join a tournament from the Home screen\nto see it here.'; break;
-      case TournamentStatus.live:      emoji = '🎮'; title = 'No Ongoing Matches';   subtitle = 'You don\'t have any live tournaments\nright now. Check back soon!'; break;
-      case TournamentStatus.completed: emoji = '🏆'; title = 'No Match History Yet'; subtitle = 'Completed tournaments will appear here\nafter your first match.'; break;
-      case TournamentStatus.cancelled: emoji = '❌'; title = 'No Cancelled Events';  subtitle = 'You have no cancelled tournaments.'; break;
+      case TournamentStatus.upcoming:
+        emoji    = '📅';
+        title    = 'No Upcoming Events';
+        subtitle = 'Join a tournament from the Home screen\nto see it here.';
+        break;
+      case TournamentStatus.live:
+        emoji    = '🎮';
+        title    = 'No Ongoing Matches';
+        subtitle = 'You don\'t have any live tournaments\nright now. Check back soon!';
+        break;
+      case TournamentStatus.completed:
+        emoji    = '🏆';
+        title    = 'No Match History Yet';
+        subtitle = 'Completed tournaments will appear here\nafter your first match.';
+        break;
+      case TournamentStatus.cancelled:
+        emoji    = '❌';
+        title    = 'No Cancelled Events';
+        subtitle = 'You have no cancelled tournaments.';
+        break;
     }
     return Center(child: Padding(padding: const EdgeInsets.all(40), child: Column(mainAxisSize: MainAxisSize.min, children: [
       Container(width: 72, height: 72, decoration: BoxDecoration(color: _C.purpleGlowFaint, shape: BoxShape.circle, border: Border.all(color: _C.border)), child: Center(child: Text(emoji, style: const TextStyle(fontSize: 30)))),

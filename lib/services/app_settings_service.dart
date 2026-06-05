@@ -1,19 +1,15 @@
 // lib/services/app_settings_service.dart
 // ─────────────────────────────────────────────
-// SHADOW STORM — App Settings Service (Phase F1)
+// SHADOW STORM — App Settings Service (Phase F2.5 / PRE-F3)
 //
-// Changes from Phase P1:
-//   PRIORITY 3 — MaintenanceGuard is now used by ALL 5 screens:
-//     HomeScreen, EventsScreen, WalletScreen, ProfileScreen,
-//     TournamentDetailsScreen — each wraps their Scaffold with
-//     MaintenanceGuard (see individual screen files).
-//     This service provides the single shared settings stream.
+// Unchanged from Phase F1. Delivered as a complete standalone file.
 //
-//   PRIORITY 4 — walletActionsAllowed and tournamentJoinAllowed getters
-//     added to AppSettings for clean checks across screens.
-//     walletFrozen blocks deposits, withdrawals, AND tournament registration.
-//
-//   All original streams, notifiers, and methods kept intact.
+// Provides:
+//   • AppSettings model with all admin-controlled flags
+//   • AppSettingsService singleton — shared stream + one-time reads
+//   • MaintenanceGuard widget — wraps all 5 player screens
+//   • WalletFreezeGuard widget — gates deposit/withdrawal actions
+//   • _MaintenanceScreen and _WalletFrozenScreen UI
 // ─────────────────────────────────────────────
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -21,7 +17,7 @@ import 'package:flutter/material.dart';
 import 'cache_service.dart';
 
 // ─────────────────────────────────────────────
-// PLAYER-SIDE SETTINGS MODEL
+// APP SETTINGS MODEL
 // ─────────────────────────────────────────────
 
 class AppSettings {
@@ -76,26 +72,12 @@ class AppSettings {
     );
   }
 
-  // ── PRIORITY 4: Wallet freeze checks ────────
-
-  /// True when deposits AND withdrawals are allowed.
-  /// Blocked by walletFrozen OR maintenanceMode.
-  bool get walletActionsAllowed => !walletFrozen && !maintenanceMode;
-
-  /// True when deposit is specifically allowed.
-  bool get depositAllowed => !walletFrozen && !maintenanceMode;
-
-  /// True when withdrawal is specifically allowed.
-  bool get withdrawalAllowed => !walletFrozen && !maintenanceMode;
-
-  /// PRIORITY 4: Tournament join is also blocked when walletFrozen.
-  /// (entry fee can't be deducted if wallet is frozen)
+  bool get walletActionsAllowed  => !walletFrozen && !maintenanceMode;
+  bool get depositAllowed        => !walletFrozen && !maintenanceMode;
+  bool get withdrawalAllowed     => !walletFrozen && !maintenanceMode;
   bool get tournamentJoinAllowed => !walletFrozen && !maintenanceMode;
+  bool get actionsBlocked        => maintenanceMode;
 
-  /// Whether any player action should be blocked (maintenance only).
-  bool get actionsBlocked => maintenanceMode;
-
-  /// Human-readable freeze/maintenance reason to show to the user.
   String get blockReason {
     if (maintenanceMode) return maintenanceMessage;
     if (walletFrozen) {
@@ -133,40 +115,26 @@ class AppSettingsService {
   final ValueNotifier<bool>        walletFrozenNotifier = ValueNotifier(false);
   final ValueNotifier<AppSettings> settingsNotifier     = ValueNotifier(const AppSettings());
 
-  // ─────────────────────────────────────────────
-  // REALTIME STREAM (shared — one listener for entire app)
-  // ─────────────────────────────────────────────
-
   Stream<AppSettings> get settingsStream {
     _settingsStream ??= _db
         .doc(_docPath)
         .snapshots()
         .map((snap) {
-          if (!snap.exists || snap.data() == null) {
-            return const AppSettings();
-          }
+          if (!snap.exists || snap.data() == null) return const AppSettings();
           final settings = AppSettings.fromMap(snap.data()!);
           _updateNotifiers(settings);
           _updateCache(settings);
           return settings;
         })
         .asBroadcastStream();
-
     return _settingsStream!;
   }
 
-  // ─────────────────────────────────────────────
-  // ONE-TIME READ (cache-first)
-  // ─────────────────────────────────────────────
-
   Future<AppSettings> getSettings({bool forceRefresh = false}) async {
     if (!forceRefresh) {
-      final cached = CacheService.instance.get<Map<String, dynamic>>(
-        CacheKey.adminSettings,
-      );
+      final cached = CacheService.instance.get<Map<String, dynamic>>(CacheKey.adminSettings);
       if (cached != null) return AppSettings.fromMap(cached);
     }
-
     try {
       final snap = await _db.doc(_docPath).get();
       if (!snap.exists || snap.data() == null) return const AppSettings();
@@ -176,25 +144,16 @@ class AppSettingsService {
       return settings;
     } catch (e) {
       debugPrint('[AppSettingsService] getSettings error: $e');
-      final cached = CacheService.instance.get<Map<String, dynamic>>(
-        CacheKey.adminSettings,
-      );
+      final cached = CacheService.instance.get<Map<String, dynamic>>(CacheKey.adminSettings);
       return cached != null ? AppSettings.fromMap(cached) : const AppSettings();
     }
   }
 
-  // ─────────────────────────────────────────────
-  // FAST MAINTENANCE CHECK
-  // ─────────────────────────────────────────────
-
   Future<bool> isMaintenanceMode() async {
     final cached = CacheService.instance.get<bool>(CacheKey.maintenanceMode);
     if (cached != null) return cached;
-
     try {
-      final snap = await _db.doc(_docPath).get(
-        const GetOptions(source: Source.serverAndCache),
-      );
+      final snap = await _db.doc(_docPath).get(const GetOptions(source: Source.serverAndCache));
       final value = (snap.data()?['maintenanceMode'] as bool?) ?? false;
       CacheService.instance.set(CacheKey.maintenanceMode, value);
       return value;
@@ -203,10 +162,6 @@ class AppSettingsService {
     }
   }
 
-  // ─────────────────────────────────────────────
-  // INTERNAL
-  // ─────────────────────────────────────────────
-
   void _updateNotifiers(AppSettings settings) {
     maintenanceNotifier.value  = settings.maintenanceMode;
     walletFrozenNotifier.value = settings.walletFrozen;
@@ -214,15 +169,8 @@ class AppSettingsService {
   }
 
   void _updateCache(AppSettings settings) {
-    CacheService.instance.set<bool>(
-      CacheKey.maintenanceMode,
-      settings.maintenanceMode,
-      ttl: const Duration(minutes: 1),
-    );
-    CacheService.instance.set<bool>(
-      CacheKey.walletSettings,
-      settings.walletFrozen,
-    );
+    CacheService.instance.set<bool>(CacheKey.maintenanceMode, settings.maintenanceMode, ttl: const Duration(minutes: 1));
+    CacheService.instance.set<bool>(CacheKey.walletSettings,  settings.walletFrozen);
   }
 
   void dispose() {
@@ -234,19 +182,13 @@ class AppSettingsService {
 
 // ─────────────────────────────────────────────
 // MAINTENANCE GUARD WIDGET
-//
-// PRIORITY 3 (F1): Wrap ALL of these screens with this widget:
-//   HomeScreen, EventsScreen, WalletScreen,
-//   ProfileScreen, TournamentDetailsScreen.
-//
-// Usage: return MaintenanceGuard(child: Scaffold(...));
-//
-// Only LoginScreen must NOT be wrapped.
+// Wraps: HomeScreen, EventsScreen, WalletScreen, ProfileScreen,
+//        TournamentDetailsScreen, RanksScreen.
+// Does NOT wrap: LoginScreen.
 // ─────────────────────────────────────────────
 
 class MaintenanceGuard extends StatelessWidget {
   final Widget child;
-
   const MaintenanceGuard({super.key, required this.child});
 
   @override
@@ -266,15 +208,10 @@ class MaintenanceGuard extends StatelessWidget {
 
 // ─────────────────────────────────────────────
 // WALLET FREEZE GUARD WIDGET
-//
-// PRIORITY 4 (F1): Use this inside WalletScreen to gate
-// deposit/withdrawal actions.
-// Usage: WalletFreezeGuard(child: _DepositSection(...))
 // ─────────────────────────────────────────────
 
 class WalletFreezeGuard extends StatelessWidget {
   final Widget child;
-
   const WalletFreezeGuard({super.key, required this.child});
 
   @override
@@ -315,57 +252,23 @@ class _MaintenanceScreen extends StatelessWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: const Color(0xFF9D55FF).withValues(alpha: 0.12),
-                  border: Border.all(
-                    color: const Color(0xFF9D55FF).withValues(alpha: 0.3),
-                  ),
+                  border: Border.all(color: const Color(0xFF9D55FF).withValues(alpha: 0.3)),
                 ),
-                child: const Icon(
-                  Icons.construction_rounded,
-                  color: Color(0xFF9D55FF), size: 40,
-                ),
+                child: const Icon(Icons.construction_rounded, color: Color(0xFF9D55FF), size: 40),
               ),
               const SizedBox(height: 28),
-              const Text(
-                'UNDER MAINTENANCE',
-                style: TextStyle(
-                  color: Color(0xFFEDE0FF), fontSize: 20,
-                  fontWeight: FontWeight.w900, letterSpacing: 2,
-                ),
-                textAlign: TextAlign.center,
-              ),
+              const Text('UNDER MAINTENANCE', style: TextStyle(color: Color(0xFFEDE0FF), fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: 2), textAlign: TextAlign.center),
               const SizedBox(height: 12),
               Container(
                 padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF130F22),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0x337B3FE4)),
-                ),
-                child: Text(
-                  message,
-                  style: const TextStyle(
-                    color: Color(0xFF9B8DC0), fontSize: 14, height: 1.6,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
+                decoration: BoxDecoration(color: const Color(0xFF130F22), borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0x337B3FE4))),
+                child: Text(message, style: const TextStyle(color: Color(0xFF9B8DC0), fontSize: 14, height: 1.6), textAlign: TextAlign.center),
               ),
               const SizedBox(height: 24),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF9D55FF).withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: const Color(0xFF9D55FF).withValues(alpha: 0.3),
-                  ),
-                ),
-                child: const Text(
-                  'We\'ll be back shortly. Follow us on Discord for updates.',
-                  style: TextStyle(
-                    color: Color(0xFF9B8DC0), fontSize: 12, height: 1.5,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
+                decoration: BoxDecoration(color: const Color(0xFF9D55FF).withValues(alpha: 0.08), borderRadius: BorderRadius.circular(20), border: Border.all(color: const Color(0xFF9D55FF).withValues(alpha: 0.3))),
+                child: const Text('We\'ll be back shortly. Follow us on Discord for updates.', style: TextStyle(color: Color(0xFF9B8DC0), fontSize: 12, height: 1.5), textAlign: TextAlign.center),
               ),
             ],
           ),
@@ -398,52 +301,20 @@ class _WalletFrozenScreen extends StatelessWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: const Color(0xFFFFAA22).withValues(alpha: 0.12),
-                  border: Border.all(
-                    color: const Color(0xFFFFAA22).withValues(alpha: 0.3),
-                  ),
+                  border: Border.all(color: const Color(0xFFFFAA22).withValues(alpha: 0.3)),
                 ),
-                child: const Icon(
-                  Icons.ac_unit_rounded,
-                  color: Color(0xFFFFAA22), size: 40,
-                ),
+                child: const Icon(Icons.ac_unit_rounded, color: Color(0xFFFFAA22), size: 40),
               ),
               const SizedBox(height: 28),
-              const Text(
-                'WALLET FROZEN',
-                style: TextStyle(
-                  color: Color(0xFFEDE0FF), fontSize: 20,
-                  fontWeight: FontWeight.w900, letterSpacing: 2,
-                ),
-                textAlign: TextAlign.center,
-              ),
+              const Text('WALLET FROZEN', style: TextStyle(color: Color(0xFFEDE0FF), fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: 2), textAlign: TextAlign.center),
               const SizedBox(height: 12),
               Container(
                 padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF130F22),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: const Color(0xFFFFAA22).withValues(alpha: 0.3),
-                  ),
-                ),
-                child: Text(
-                  reason.isNotEmpty
-                      ? reason
-                      : 'Wallet operations are temporarily suspended by the admin.',
-                  style: const TextStyle(
-                    color: Color(0xFF9B8DC0), fontSize: 14, height: 1.6,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
+                decoration: BoxDecoration(color: const Color(0xFF130F22), borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0xFFFFAA22).withValues(alpha: 0.3))),
+                child: Text(reason.isNotEmpty ? reason : 'Wallet operations are temporarily suspended by the admin.', style: const TextStyle(color: Color(0xFF9B8DC0), fontSize: 14, height: 1.6), textAlign: TextAlign.center),
               ),
               const SizedBox(height: 24),
-              const Text(
-                'You can still browse tournaments and the app.\nDeposits, withdrawals, and tournament entry are disabled.',
-                style: TextStyle(
-                  color: Color(0xFF5A4E80), fontSize: 12, height: 1.6,
-                ),
-                textAlign: TextAlign.center,
-              ),
+              const Text('You can still browse tournaments and the app.\nDeposits, withdrawals, and tournament entry are disabled until the freeze is lifted.', style: TextStyle(color: Color(0xFF5A4E80), fontSize: 12, height: 1.6), textAlign: TextAlign.center),
             ],
           ),
         ),
